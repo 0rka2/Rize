@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
+
 class AddHabitScreen extends StatefulWidget {
   const AddHabitScreen({super.key});
 
@@ -46,7 +48,10 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                 const SizedBox(height: 10),
                 Text(
                   'Start with something small and meaningful to you.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: const Color(0xFFA6A3AE)),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(color: AppColors.coolGrey),
                 ),
                 const SizedBox(height: 28),
                 TextField(
@@ -60,18 +65,25 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                     labelText: 'Habit name',
                     hintText: 'For example, take a short walk',
                     filled: true,
-                    fillColor: const Color(0xFF19191F),
+                    fillColor: AppColors.charcoalGrey,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(18),
-                      borderSide: const BorderSide(color: Color(0xFF33323A)),
+                      borderSide: BorderSide(
+                        color: AppColors.coolGrey.withValues(alpha: 0.3),
+                      ),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(18),
-                      borderSide: const BorderSide(color: Color(0xFF33323A)),
+                      borderSide: BorderSide(
+                        color: AppColors.coolGrey.withValues(alpha: 0.3),
+                      ),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(18),
-                      borderSide: const BorderSide(color: Color(0xFF9188FF), width: 1.5),
+                      borderSide: const BorderSide(
+                        color: AppColors.burntOrange,
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),

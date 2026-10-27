@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/habit_repository.dart';
 import '../domain/habit.dart';
+import '../theme/app_colors.dart';
 import 'add_habit_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -136,8 +137,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             onPressed: _isLoading ? null : _openAddHabit,
                             icon: const Icon(Icons.add_rounded, size: 28),
                             style: IconButton.styleFrom(
-                              backgroundColor: const Color(0xFF9188FF),
-                              foregroundColor: const Color(0xFF101014),
+                              backgroundColor: AppColors.burntOrange,
+                              foregroundColor: AppColors.carbon,
                               minimumSize: const Size(52, 52),
                             ),
                           ),
@@ -214,10 +215,14 @@ class _EmptyState extends StatelessWidget {
               width: 76,
               height: 76,
               decoration: BoxDecoration(
-                color: const Color(0xFF25232E),
+                color: AppColors.charcoalGrey,
                 borderRadius: BorderRadius.circular(26),
               ),
-              child: const Icon(Icons.spa_outlined, color: Color(0xFFB5AEFF), size: 36),
+              child: const Icon(
+                Icons.spa_outlined,
+                color: AppColors.burntOrange,
+                size: 36,
+              ),
             ),
             const SizedBox(height: 22),
             Text(
@@ -261,10 +266,10 @@ class _HabitCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = isComplete ? const Color(0xFF9188FF) : const Color(0xFFFF777B);
+    final accent = isComplete ? AppColors.successGreen : AppColors.burntOrange;
 
     return Material(
-      color: const Color(0xFF19191F),
+      color: AppColors.charcoalGrey,
       borderRadius: BorderRadius.circular(22),
       child: InkWell(
         onTap: onTap,
@@ -274,7 +279,7 @@ class _HabitCard extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: const Color(0xFF2A2930)),
+            border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
           ),
           child: Row(
             children: [
@@ -303,7 +308,10 @@ class _HabitCard extends StatelessWidget {
                       const SizedBox(height: 5),
                       Text(
                         '$streak day${streak == 1 ? '' : 's'} in a row',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: const Color(0xFFAAA7B2)),
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: AppColors.coolGrey),
                       ),
                     ],
                   ],
@@ -316,13 +324,13 @@ class _HabitCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: isComplete ? accent : const Color(0xFF24232A),
+                    color: isComplete ? accent : AppColors.carbon,
                     shape: BoxShape.circle,
                     border: Border.all(color: accent.withValues(alpha: isComplete ? 0 : 0.55)),
                   ),
                   child: Icon(
                     isComplete ? Icons.check_rounded : Icons.add_rounded,
-                    color: isComplete ? const Color(0xFF101014) : accent,
+                    color: isComplete ? AppColors.carbon : accent,
                   ),
                 ),
               ),
@@ -342,15 +350,15 @@ class _StorageMessage extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: const Color(0xFF332427),
+          color: AppColors.charcoalGrey,
           borderRadius: BorderRadius.circular(12),
         ),
         child: const Text(
           'Your changes may not have been saved. Please try again.',
-          style: TextStyle(color: Color(0xFFFFC6C5)),
+          style: TextStyle(color: AppColors.burntOrange),
         ),
       );
 }
 
 TextStyle? _mutedTextStyle(BuildContext context) =>
-    Theme.of(context).textTheme.bodyMedium?.copyWith(color: const Color(0xFFA6A3AE));
+    Theme.of(context).textTheme.bodyMedium?.copyWith(color: AppColors.coolGrey);

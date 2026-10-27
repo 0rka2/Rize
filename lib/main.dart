@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'data/habit_repository.dart';
 import 'presentation/home_screen.dart';
+import 'theme/app_colors.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,13 +18,13 @@ class RizeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const colors = ColorScheme.dark(
-      primary: Color(0xFF9188FF),
-      secondary: Color(0xFFFF777B),
-      surface: Color(0xFF17171C),
-      error: Color(0xFFFF777B),
-      onPrimary: Color(0xFF101014),
-      onSecondary: Color(0xFF101014),
-      onSurface: Color(0xFFF7F5FA),
+      primary: AppColors.burntOrange,
+      secondary: AppColors.successGreen,
+      surface: AppColors.charcoalGrey,
+      error: AppColors.burntOrange,
+      onPrimary: AppColors.carbon,
+      onSecondary: AppColors.carbon,
+      onSurface: AppColors.offWhite,
     );
 
     return MaterialApp(
@@ -32,12 +33,12 @@ class RizeApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: colors,
-        scaffoldBackgroundColor: const Color(0xFF101014),
+        scaffoldBackgroundColor: AppColors.carbon,
         fontFamily: 'Roboto',
         snackBarTheme: SnackBarThemeData(
           behavior: SnackBarBehavior.floating,
           backgroundColor: colors.surface,
-          contentTextStyle: const TextStyle(color: Color(0xFFF7F5FA)),
+          contentTextStyle: const TextStyle(color: AppColors.offWhite),
         ),
       ),
       home: HomeScreen(repository: repository),
