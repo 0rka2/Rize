@@ -7,7 +7,7 @@ import '../domain/habit.dart';
 
 class HabitRepository {
   static const _databaseName = 'rize.db';
-  static const _databaseVersion = 1;
+  static const _databaseVersion = 2;
 
   Future<Database>? _database;
 
@@ -25,17 +25,33 @@ class HabitRepository {
         await database.execute('''
           CREATE TABLE habits (
             id TEXT PRIMARY KEY,
-            name TEXT NOT NULL
+            name TEXT NOT NULL,
+            target INTEGER NOT NULL DEFAULT 1,
+            unit TEXT NOT NULL DEFAULT 'times'
           )
         ''');
         await database.execute('''
           CREATE TABLE check_ins (
             habit_id TEXT NOT NULL,
             day TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (habit_id, day),
             FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE
           )
         ''');
+      },
+      onUpgrade: (database, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await database.execute(
+            "ALTER TABLE habits ADD COLUMN target INTEGER NOT NULL DEFAULT 1",
+          );
+          await database.execute(
+            "ALTER TABLE habits ADD COLUMN unit TEXT NOT NULL DEFAULT 'times'",
+          );
+          await database.execute(
+            'ALTER TABLE check_ins ADD COLUMN count INTEGER NOT NULL DEFAULT 1',
+          );
+        }
       },
     );
   }
@@ -44,11 +60,13 @@ class HabitRepository {
     final database = await _db;
     final habitRows = await database.query('habits', orderBy: 'rowid');
     final checkInRows = await database.query('check_ins');
-    final daysByHabit = <String, Set<String>>{};
+    final countsByHabit = <String, Map<String, int>>{};
 
     for (final row in checkInRows) {
       final habitId = row['habit_id'] as String;
-      daysByHabit.putIfAbsent(habitId, () => <String>{}).add(row['day'] as String);
+      countsByHabit.putIfAbsent(habitId, () => <String, int>{})[row['day']
+              as String] =
+          row['count'] as int;
     }
 
     return habitRows
@@ -56,7 +74,9 @@ class HabitRepository {
           (row) => Habit(
             id: row['id'] as String,
             name: row['name'] as String,
-            completedDays: daysByHabit[row['id']] ?? const <String>{},
+            target: row['target'] as int,
+            unit: row['unit'] as String,
+            dailyCounts: countsByHabit[row['id']] ?? const <String, int>{},
           ),
         )
         .toList();
@@ -66,45 +86,71 @@ class HabitRepository {
     final database = await _db;
     await database.transaction((transaction) async {
       final existingRows = await transaction.query('habits', columns: ['id']);
-      final existingIds = existingRows.map((row) => row['id'] as String).toSet();
+      final existingIds =
+          existingRows.map((row) => row['id'] as String).toSet();
       final incomingIds = habits.map((habit) => habit.id).toSet();
 
       for (final removedId in existingIds.difference(incomingIds)) {
-        await transaction.delete('habits', where: 'id = ?', whereArgs: [removedId]);
+        await transaction.delete(
+          'habits',
+          where: 'id = ?',
+          whereArgs: [removedId],
+        );
       }
 
       for (final habit in habits) {
         if (existingIds.contains(habit.id)) {
           await transaction.update(
             'habits',
-            {'name': habit.name},
+            {'name': habit.name, 'target': habit.target, 'unit': habit.unit},
             where: 'id = ?',
             whereArgs: [habit.id],
           );
         } else {
-          await transaction.insert('habits', {'id': habit.id, 'name': habit.name});
+          await transaction.insert('habits', {
+            'id': habit.id,
+            'name': habit.name,
+            'target': habit.target,
+            'unit': habit.unit,
+          });
         }
 
         final savedCheckIns = await transaction.query(
           'check_ins',
-          columns: ['day'],
+          columns: ['day', 'count'],
           where: 'habit_id = ?',
           whereArgs: [habit.id],
         );
-        final savedDays = savedCheckIns.map((row) => row['day'] as String).toSet();
+        final savedCounts = {
+          for (final row in savedCheckIns)
+            row['day'] as String: row['count'] as int,
+        };
 
-        for (final removedDay in savedDays.difference(habit.completedDays)) {
+        for (final removedDay in savedCounts.keys.toSet().difference(
+          habit.dailyCounts.keys.toSet(),
+        )) {
           await transaction.delete(
             'check_ins',
             where: 'habit_id = ? AND day = ?',
             whereArgs: [habit.id, removedDay],
           );
         }
-        for (final addedDay in habit.completedDays.difference(savedDays)) {
-          await transaction.insert(
-            'check_ins',
-            {'habit_id': habit.id, 'day': addedDay},
-          );
+        for (final entry in habit.dailyCounts.entries) {
+          final previousCount = savedCounts[entry.key];
+          if (previousCount == null) {
+            await transaction.insert('check_ins', {
+              'habit_id': habit.id,
+              'day': entry.key,
+              'count': entry.value,
+            });
+          } else if (previousCount != entry.value) {
+            await transaction.update(
+              'check_ins',
+              {'count': entry.value},
+              where: 'habit_id = ? AND day = ?',
+              whereArgs: [habit.id, entry.key],
+            );
+          }
         }
       }
     });

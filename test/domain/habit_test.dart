@@ -3,30 +3,36 @@ import 'package:rize/domain/habit.dart';
 
 void main() {
   group('Habit', () {
-    test('toggleCompletion adds and removes a local day check-in', () {
-      final habit = Habit(
-        id: 'walk',
-        name: 'Take a walk',
-        completedDays: const {},
-      );
+    test('count changes stay between zero and the daily target', () {
+      final habit = Habit(id: 'walk', name: 'Take a walk', target: 2);
       final today = DateTime(2026, 10, 26);
 
-      final completed = habit.toggleCompletion(today);
-      final undone = completed.toggleCompletion(today);
+      final once = habit.addCount(today);
+      final complete = once.addCount(today);
+      final capped = complete.addCount(today);
+      final undone = capped
+          .removeCount(today)
+          .removeCount(today)
+          .removeCount(today);
 
-      expect(completed.isCompleteOn(today), isTrue);
+      expect(once.countOn(today), 1);
+      expect(once.isCompleteOn(today), isFalse);
+      expect(complete.isCompleteOn(today), isTrue);
+      expect(capped.countOn(today), 2);
       expect(undone.isCompleteOn(today), isFalse);
+      expect(undone.countOn(today), 0);
     });
 
-    test('currentStreak counts consecutive completed days through today', () {
+    test('current streak counts consecutive days that reached the target', () {
       final today = DateTime(2026, 10, 26);
       final habit = Habit(
         id: 'walk',
         name: 'Take a walk',
-        completedDays: {
-          dayKey(today),
-          dayKey(today.subtract(const Duration(days: 1))),
-          dayKey(today.subtract(const Duration(days: 2))),
+        target: 2,
+        dailyCounts: {
+          dayKey(today): 2,
+          dayKey(today.subtract(const Duration(days: 1))): 2,
+          dayKey(today.subtract(const Duration(days: 2))): 2,
         },
       );
 
@@ -38,9 +44,7 @@ void main() {
       final habit = Habit(
         id: 'walk',
         name: 'Take a walk',
-        completedDays: {
-          dayKey(today.subtract(const Duration(days: 2))),
-        },
+        dailyCounts: {dayKey(today.subtract(const Duration(days: 2))): 1},
       );
 
       expect(habit.currentStreak(today), 0);
@@ -51,12 +55,26 @@ void main() {
       final habit = Habit(
         id: 'walk',
         name: 'Take a walk',
-        completedDays: {
-          dayKey(today.subtract(const Duration(days: 1))),
-        },
+        dailyCounts: {dayKey(today.subtract(const Duration(days: 1))): 1},
       );
 
       expect(habit.currentStreak(today), 1);
     });
+
+    test(
+      'partial progress does not complete a day or count toward streaks',
+      () {
+        final today = DateTime(2026, 10, 26);
+        final habit = Habit(
+          id: 'water',
+          name: 'Drink water',
+          target: 8,
+          dailyCounts: {dayKey(today): 7},
+        );
+
+        expect(habit.isCompleteOn(today), isFalse);
+        expect(habit.currentStreak(today), 0);
+      },
+    );
   });
 }
