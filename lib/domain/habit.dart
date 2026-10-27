@@ -2,22 +2,34 @@ class Habit {
   const Habit({
     required this.id,
     required this.name,
-    required this.completedDays,
+    this.target = 1,
+    this.unit = 'times',
+    this.dailyCounts = const {},
   });
 
   final String id;
   final String name;
-  final Set<String> completedDays;
+  final int target;
+  final String unit;
+  final Map<String, int> dailyCounts;
 
-  bool isCompleteOn(DateTime day) => completedDays.contains(dayKey(day));
+  int countOn(DateTime day) => dailyCounts[dayKey(day)] ?? 0;
 
-  Habit toggleCompletion(DateTime day) {
-    final updatedDays = Set<String>.from(completedDays);
+  bool isCompleteOn(DateTime day) => countOn(day) >= target;
+
+  Habit addCount(DateTime day) => _withCount(day, countOn(day) + 1);
+
+  Habit removeCount(DateTime day) => _withCount(day, countOn(day) - 1);
+
+  Habit _withCount(DateTime day, int count) {
+    final updatedCounts = Map<String, int>.from(dailyCounts);
     final key = dayKey(day);
-    if (!updatedDays.add(key)) {
-      updatedDays.remove(key);
+    if (count <= 0) {
+      updatedCounts.remove(key);
+    } else {
+      updatedCounts[key] = count > target ? target : count;
     }
-    return copyWith(completedDays: updatedDays);
+    return copyWith(dailyCounts: updatedCounts);
   }
 
   int currentStreak(DateTime today) {
@@ -34,10 +46,13 @@ class Habit {
     return streak;
   }
 
-  Habit copyWith({Set<String>? completedDays}) => Habit(
+  Habit copyWith({int? target, String? unit, Map<String, int>? dailyCounts}) =>
+      Habit(
         id: id,
         name: name,
-        completedDays: completedDays ?? this.completedDays,
+        target: target ?? this.target,
+        unit: unit ?? this.unit,
+        dailyCounts: dailyCounts ?? this.dailyCounts,
       );
 }
 

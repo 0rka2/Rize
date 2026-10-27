@@ -8,23 +8,50 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:rize/main.dart';
+import 'package:rize/data/habit_repository.dart';
+import 'package:rize/domain/habit.dart';
+import 'package:rize/presentation/home_screen.dart';
+
+class _MemoryHabitRepository extends HabitRepository {
+  List<Habit> habits = [];
+
+  @override
+  Future<List<Habit>> loadHabits() async => habits;
+
+  @override
+  Future<void> saveHabits(List<Habit> habits) async {
+    this.habits = habits;
+  }
+}
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('creates a targeted habit and tracks today progress', (
+    tester,
+  ) async {
+    final repository = _MemoryHabitRepository();
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    await tester.tap(find.text('Add your first habit'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'Drink water');
+    await tester.enterText(find.byType(TextField).at(1), '2');
+    await tester.enterText(find.byType(TextField).at(2), 'glasses');
+    await tester.tap(find.text('Save habit'));
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    expect(find.text('0 / 2 glasses'), findsOneWidget);
+    expect(repository.habits.single.target, 2);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    await tester.tap(find.byTooltip('Add one glasses'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 2 glasses'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Add one glasses'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 2 glasses'), findsOneWidget);
+    expect(repository.habits.single.isCompleteOn(DateTime.now()), isTrue);
   });
 }
