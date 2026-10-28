@@ -63,32 +63,61 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   }
 
   Future<void> _editNote() async {
-    final key = dayKey(_selectedDay);
+    await _editNoteForDay(_selectedDay);
+  }
+
+  Future<void> _editNoteForDay(DateTime day) async {
+    final key = dayKey(day);
     final savedNote = await showDialog<String>(
       context: context,
       builder:
           (_) => _NoteEditorDialog(
-            day: _selectedDay,
+            day: day,
             initialNote: _notes[key] ?? '',
+            repository: widget.repository,
+            habitId: _habit.id,
           ),
     );
     if (savedNote == null || !mounted) return;
 
-    try {
-      await widget.repository.saveNote(_habit.id, _selectedDay, savedNote);
-      if (!mounted) return;
-      setState(() {
-        if (savedNote.trim().isEmpty) {
-          _notes.remove(key);
-        } else {
-          _notes[key] = savedNote.trim();
-        }
-        _noteError = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _noteError = true);
-    }
+    _applyNoteChange(key, savedNote);
+  }
+
+  void _applyNoteChange(String key, String content) {
+    setState(() {
+      if (content.isEmpty) {
+        _notes.remove(key);
+      } else {
+        _notes[key] = content;
+      }
+      _noteError = false;
+    });
+  }
+
+  Future<void> _openAllNotes() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder:
+            (_) => HabitNotesScreen(
+              habit: _habit,
+              repository: widget.repository,
+              initialNotes: _notes,
+              onNotesChanged: (notes) {
+                if (!mounted) return;
+                setState(() {
+                  _notes = notes;
+                  _noteError = false;
+                });
+              },
+            ),
+      ),
+    );
+  }
+
+  List<MapEntry<String, String>> _sortedNotes() {
+    final entries = _notes.entries.toList();
+    entries.sort((a, b) => b.key.compareTo(a.key));
+    return entries;
   }
 
   void _changeMonth(int offset) {
@@ -110,8 +139,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final color = Color(_habit.colorValue);
-    final selectedKey = dayKey(_selectedDay);
-    final selectedNote = _notes[selectedKey];
+    final recentNotes = _sortedNotes().take(3).toList();
     return Scaffold(
       appBar: AppBar(
         title: const Text('Habit'),
@@ -168,9 +196,11 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               noteDays: _notes.keys.toSet(),
               visibleMonth: _visibleMonth,
               selectedDay: _selectedDay,
+              hasSelectedNote: _notes.containsKey(dayKey(_selectedDay)),
               onPreviousMonth: () => _changeMonth(-1),
               onNextMonth: () => _changeMonth(1),
               onSelectDay: _selectDay,
+              onEditSelectedNote: _editNote,
             ),
             const SizedBox(height: 18),
             Container(
@@ -182,57 +212,53 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
                   color: AppColors.coolGrey.withValues(alpha: 0.16),
                 ),
               ),
-              child: Row(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(Icons.edit_note_rounded, color: color),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          selectedNote == null
-                              ? 'No note for this day'
-                              : 'Note',
-                          style: Theme.of(context).textTheme.titleMedium
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Notes',
+                          style: Theme.of(context).textTheme.titleLarge
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          selectedNote ??
-                              'Add a reflection for ${MaterialLocalizations.of(context).formatMediumDate(_selectedDay)}.',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: AppColors.coolGrey),
+                      ),
+                      Text(
+                        '${_notes.length}',
+                        key: const Key('notes-count'),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(color: AppColors.coolGrey),
+                      ),
+                      const SizedBox(width: 10),
+                      TextButton.icon(
+                        onPressed: _openAllNotes,
+                        icon: const Icon(Icons.chevron_right_rounded),
+                        label: const Text('All notes'),
+                        iconAlignment: IconAlignment.end,
+                      ),
+                    ],
+                  ),
+                  if (_loadingNotes)
+                    const Center(child: CircularProgressIndicator())
+                  else if (recentNotes.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'No notes yet',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.coolGrey,
                         ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: selectedNote == null ? 'Add note' : 'Edit note',
-                    onPressed: _editNote,
-                    icon: Icon(
-                      selectedNote == null
-                          ? Icons.add_rounded
-                          : Icons.edit_outlined,
-                      color: color,
-                    ),
-                  ),
+                      ),
+                    )
+                  else
+                    for (final entry in recentNotes) ...[
+                      const SizedBox(height: 10),
+                      _NotePreviewCard(entry: entry),
+                    ],
                 ],
               ),
             ),
-            if (_loadingNotes) ...[
-              const SizedBox(height: 12),
-              const Center(child: CircularProgressIndicator()),
-            ],
             if (_noteError) ...[
               const SizedBox(height: 12),
               const Text(
@@ -248,10 +274,17 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
 }
 
 class _NoteEditorDialog extends StatefulWidget {
-  const _NoteEditorDialog({required this.day, required this.initialNote});
+  const _NoteEditorDialog({
+    required this.day,
+    required this.initialNote,
+    required this.repository,
+    required this.habitId,
+  });
 
   final DateTime day;
   final String initialNote;
+  final HabitRepository repository;
+  final String habitId;
 
   @override
   State<_NoteEditorDialog> createState() => _NoteEditorDialogState();
@@ -259,6 +292,8 @@ class _NoteEditorDialog extends StatefulWidget {
 
 class _NoteEditorDialogState extends State<_NoteEditorDialog> {
   late final TextEditingController _controller;
+  bool _saving = false;
+  String? _error;
 
   @override
   void initState() {
@@ -272,18 +307,327 @@ class _NoteEditorDialogState extends State<_NoteEditorDialog> {
     super.dispose();
   }
 
+  Future<void> _save({bool delete = false}) async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final content = delete ? '' : _controller.text.trim();
+    try {
+      await widget.repository.saveNote(widget.habitId, widget.day, content);
+      if (mounted) Navigator.pop(context, content);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'Your note could not be saved. Please try again.';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: Text(MaterialLocalizations.of(context).formatMediumDate(widget.day)),
-    content: TextField(
-      controller: _controller,
-      autofocus: true,
-      minLines: 3,
-      maxLines: 6,
-      maxLength: 500,
-      textCapitalization: TextCapitalization.sentences,
-      decoration: const InputDecoration(
-        hintText: 'What went well? What got in the way?',
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: _controller,
+          autofocus: true,
+          minLines: 3,
+          maxLines: 6,
+          maxLength: 500,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            hintText: 'What went well? What got in the way?',
+          ),
+        ),
+        if (_error != null)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              _error!,
+              style: const TextStyle(color: AppColors.burntOrange),
+            ),
+          ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      if (widget.initialNote.isNotEmpty)
+        TextButton(
+          onPressed: _saving ? null : () => _save(delete: true),
+          child: const Text('Delete'),
+        ),
+      FilledButton(
+        onPressed: _saving ? null : _save,
+        child: Text(_saving ? 'Saving…' : 'Save'),
+      ),
+    ],
+  );
+}
+
+class HabitNotesScreen extends StatefulWidget {
+  const HabitNotesScreen({
+    required this.habit,
+    required this.repository,
+    required this.initialNotes,
+    required this.onNotesChanged,
+    super.key,
+  });
+
+  final Habit habit;
+  final HabitRepository repository;
+  final Map<String, String> initialNotes;
+  final ValueChanged<Map<String, String>> onNotesChanged;
+
+  @override
+  State<HabitNotesScreen> createState() => _HabitNotesScreenState();
+}
+
+class _HabitNotesScreenState extends State<HabitNotesScreen> {
+  late Map<String, String> _notes;
+  bool _loading = true;
+  bool _loadError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _notes = Map.of(widget.initialNotes);
+    _loadNotes();
+  }
+
+  Future<void> _loadNotes() async {
+    try {
+      final notes = await widget.repository.loadNotes(widget.habit.id);
+      if (!mounted) return;
+      setState(() {
+        _notes = notes;
+        _loading = false;
+        _loadError = false;
+      });
+      widget.onNotesChanged(Map.of(notes));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadError = true;
+      });
+    }
+  }
+
+  List<MapEntry<String, String>> get _sortedNotes {
+    final entries = _notes.entries.toList();
+    entries.sort((a, b) => b.key.compareTo(a.key));
+    return entries;
+  }
+
+  Future<void> _editNote(DateTime day) async {
+    final key = dayKey(day);
+    final content = await showDialog<String>(
+      context: context,
+      builder:
+          (_) => _NoteEditorDialog(
+            day: day,
+            initialNote: _notes[key] ?? '',
+            repository: widget.repository,
+            habitId: widget.habit.id,
+          ),
+    );
+    if (content == null || !mounted) return;
+
+    final updated = Map<String, String>.of(_notes);
+    if (content.isEmpty) {
+      updated.remove(key);
+    } else {
+      updated[key] = content;
+    }
+    setState(() => _notes = updated);
+    widget.onNotesChanged(Map.of(updated));
+  }
+
+  Future<void> _addNote() async {
+    final day = await showDialog<DateTime>(
+      context: context,
+      builder: (_) => _NoteDatePickerDialog(),
+    );
+    if (day != null && mounted) await _editNote(day);
+  }
+
+  String _dateLabel(String key) {
+    final parts = key.split('-').map(int.parse).toList();
+    return MaterialLocalizations.of(
+      context,
+    ).formatMediumDate(DateTime(parts[0], parts[1], parts[2]));
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Notes'),
+          Text(
+            widget.habit.name,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppColors.coolGrey),
+          ),
+        ],
+      ),
+      actions: [
+        IconButton(
+          tooltip: 'Add note for a date',
+          onPressed: _addNote,
+          icon: const Icon(Icons.add_rounded),
+        ),
+      ],
+    ),
+    body: SafeArea(
+      child:
+          _loading && _notes.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : ListView(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+                children: [
+                  if (_loadError)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'Notes could not be loaded. Showing the last available notes.',
+                        style: TextStyle(color: AppColors.burntOrange),
+                      ),
+                    ),
+                  if (_notes.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 36),
+                      child: Center(
+                        child: Text(
+                          'No notes yet. Tap + to add one.',
+                          style: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(color: AppColors.coolGrey),
+                        ),
+                      ),
+                    )
+                  else
+                    for (final entry in _sortedNotes)
+                      _FullNoteCard(
+                        entry: entry,
+                        dateLabel: _dateLabel(entry.key),
+                        onEdit: () => _editNote(_dateFromKey(entry.key)),
+                      ),
+                ],
+              ),
+    ),
+  );
+}
+
+class _FullNoteCard extends StatelessWidget {
+  const _FullNoteCard({
+    required this.entry,
+    required this.dateLabel,
+    required this.onEdit,
+  });
+
+  final MapEntry<String, String> entry;
+  final String dateLabel;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.fromLTRB(16, 12, 10, 14),
+    decoration: BoxDecoration(
+      color: AppColors.charcoalGrey,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.circle, size: 8, color: AppColors.coolGrey),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                dateLabel,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Edit note',
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined, size: 19),
+            ),
+          ],
+        ),
+        Text(entry.value, style: Theme.of(context).textTheme.bodyLarge),
+      ],
+    ),
+  );
+}
+
+class _NotePreviewCard extends StatelessWidget {
+  const _NotePreviewCard({required this.entry});
+
+  final MapEntry<String, String> entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = entry.key.split('-').map(int.parse).toList();
+    final date = DateTime(parts[0], parts[1], parts[2]);
+    final label = MaterialLocalizations.of(context).formatMediumDate(date);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.carbon,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.14)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: AppColors.coolGrey,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            entry.value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteDatePickerDialog extends StatelessWidget {
+  const _NoteDatePickerDialog();
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Choose a date'),
+    content: SizedBox(
+      width: 340,
+      child: CalendarDatePicker(
+        initialDate: DateTime.now(),
+        firstDate: DateTime(1900),
+        lastDate: DateTime(2100),
+        onDateChanged: (day) => Navigator.pop(context, day),
       ),
     ),
     actions: [
@@ -291,17 +635,13 @@ class _NoteEditorDialogState extends State<_NoteEditorDialog> {
         onPressed: () => Navigator.pop(context),
         child: const Text('Cancel'),
       ),
-      if (widget.initialNote.isNotEmpty)
-        TextButton(
-          onPressed: () => Navigator.pop(context, ''),
-          child: const Text('Delete'),
-        ),
-      FilledButton(
-        onPressed: () => Navigator.pop(context, _controller.text.trim()),
-        child: const Text('Save'),
-      ),
     ],
   );
+}
+
+DateTime _dateFromKey(String key) {
+  final parts = key.split('-').map(int.parse).toList();
+  return DateTime(parts[0], parts[1], parts[2]);
 }
 
 class _CalendarCard extends StatelessWidget {
@@ -310,18 +650,22 @@ class _CalendarCard extends StatelessWidget {
     required this.noteDays,
     required this.visibleMonth,
     required this.selectedDay,
+    required this.hasSelectedNote,
     required this.onPreviousMonth,
     required this.onNextMonth,
     required this.onSelectDay,
+    required this.onEditSelectedNote,
   });
 
   final Habit habit;
   final Set<String> noteDays;
   final DateTime visibleMonth;
   final DateTime selectedDay;
+  final bool hasSelectedNote;
   final VoidCallback onPreviousMonth;
   final VoidCallback onNextMonth;
   final ValueChanged<DateTime> onSelectDay;
+  final VoidCallback onEditSelectedNote;
 
   @override
   Widget build(BuildContext context) {
@@ -422,37 +766,62 @@ class _CalendarCard extends StatelessWidget {
                           isSelected || isToday ? accent : Colors.transparent,
                     ),
                   ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  child: Stack(
                     children: [
-                      Text(
-                        '${day.day}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color:
-                              inMonth
-                                  ? AppColors.offWhite
-                                  : AppColors.coolGrey.withValues(alpha: 0.45),
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              '${day.day}',
+                              style: Theme.of(
+                                context,
+                              ).textTheme.bodySmall?.copyWith(
+                                color:
+                                    inMonth
+                                        ? AppColors.offWhite
+                                        : AppColors.coolGrey.withValues(
+                                          alpha: 0.45,
+                                        ),
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            if (inMonth &&
+                                !isFuture &&
+                                (complete || partial || hasNote))
+                              Container(
+                                width: 5,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color:
+                                      hasNote && !complete && !partial
+                                          ? AppColors.offWhite
+                                          : partial
+                                          ? markColor.withValues(alpha: 0.55)
+                                          : markColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              )
+                            else
+                              const SizedBox(height: 5),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      if (inMonth &&
-                          !isFuture &&
-                          (complete || partial || hasNote))
-                        Container(
-                          width: 5,
-                          height: 5,
-                          decoration: BoxDecoration(
+                      if (inMonth && hasNote)
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          child: Icon(
+                            Icons.notes_rounded,
+                            size: 12,
                             color:
-                                hasNote && !complete && !partial
-                                    ? AppColors.offWhite
-                                    : partial
-                                    ? markColor.withValues(alpha: 0.55)
-                                    : markColor,
-                            shape: BoxShape.circle,
+                                isSelected
+                                    ? accent
+                                    : AppColors.offWhite.withValues(
+                                      alpha: 0.75,
+                                    ),
                           ),
-                        )
-                      else
-                        const SizedBox(height: 5),
+                        ),
                     ],
                   ),
                 ),
@@ -466,6 +835,14 @@ class _CalendarCard extends StatelessWidget {
                 onPressed: () => onSelectDay(localToday),
                 icon: const Icon(Icons.today_rounded, size: 18),
                 label: const Text('Today'),
+              ),
+              IconButton(
+                tooltip:
+                    hasSelectedNote
+                        ? 'Edit note for selected day'
+                        : 'Add note for selected day',
+                onPressed: onEditSelectedNote,
+                icon: const Icon(Icons.edit_note_rounded),
               ),
               const Spacer(),
               Text(

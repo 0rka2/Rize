@@ -92,40 +92,37 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _trackHabit(Habit habit) async {
     final today = DateTime.now();
-    if (habit.trackingMode == TrackingMode.yesNo) {
-      final updated =
-          _habits
-              .map((item) => item.id == habit.id ? item.toggleDay(today) : item)
-              .toList();
-      await _saveHabits(updated);
-      return;
+    String initialNote = '';
+    try {
+      initialNote =
+          (await widget.repository.loadNotes(habit.id))[dayKey(today)] ?? '';
+    } catch (_) {
+      // The tracking sheet remains usable if loading the optional note fails.
     }
-
-    final updated = <Habit>[];
-    final reachedDailyGoal =
-        habit.type == HabitType.build &&
-        (habit.trackingMode == TrackingMode.count ||
-            habit.trackingMode == TrackingMode.measure) &&
-        habit.countOn(today) >= habit.target;
-    if (habit.tapAction == TapAction.enterTotal || reachedDailyGoal) {
-      final entered = await _askForTotal(habit);
-      if (entered == null || !mounted) return;
-      for (final item in _habits) {
-        updated.add(item.id == habit.id ? item.setCount(today, entered) : item);
-      }
-    } else {
-      for (final item in _habits) {
-        updated.add(item.id == habit.id ? item.addCount(today) : item);
-      }
-    }
-    await _saveHabits(updated);
-  }
-
-  Future<double?> _askForTotal(Habit habit) async {
-    return showDialog<double>(
+    final count = await showModalBottomSheet<double>(
       context: context,
-      builder: (_) => _TotalEditorDialog(habit: habit),
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      backgroundColor: Colors.transparent,
+      builder:
+          (_) => _DailyTrackingSheet(
+            habit: habit,
+            today: today,
+            repository: widget.repository,
+            initialNote: initialNote,
+          ),
     );
+    if (count == null || !mounted) return;
+
+    final updated =
+        _habits
+            .map(
+              (item) =>
+                  item.id == habit.id ? item.setCount(today, count) : item,
+            )
+            .toList();
+    await _saveHabits(updated);
   }
 
   Future<bool> _saveHabits(List<Habit> habits) async {
@@ -221,58 +218,474 @@ class _HomeScreenState extends State<HomeScreen> {
   );
 }
 
-class _TotalEditorDialog extends StatefulWidget {
-  const _TotalEditorDialog({required this.habit});
+class _DailyTrackingSheet extends StatefulWidget {
+  const _DailyTrackingSheet({
+    required this.habit,
+    required this.today,
+    required this.repository,
+    required this.initialNote,
+  });
 
   final Habit habit;
+  final DateTime today;
+  final HabitRepository repository;
+  final String initialNote;
 
   @override
-  State<_TotalEditorDialog> createState() => _TotalEditorDialogState();
+  State<_DailyTrackingSheet> createState() => _DailyTrackingSheetState();
 }
 
-class _TotalEditorDialogState extends State<_TotalEditorDialog> {
-  late final TextEditingController _controller;
+class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
+  late final TextEditingController _countController;
+  late final TextEditingController _noteController;
+  late double _count;
+  late String _note;
+  bool _isEditingNote = false;
+
+  Habit get _habit => widget.habit;
+  bool get _isYesNo => _habit.trackingMode == TrackingMode.yesNo;
+  bool get _isQuit => _habit.type == HabitType.quit;
+  double get _goal => _isYesNo ? 1 : _habit.target;
+  double get _progress =>
+      _isQuit ? (_count == 0 ? 1 : 0) : (_count / _goal).clamp(0, 1);
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(
-      text: widget.habit.countOn(DateTime.now()).toString(),
-    );
+    _count = _habit.countOn(widget.today);
+    _note = widget.initialNote;
+    _countController = TextEditingController(text: _formatCount(_count));
+    _noteController = TextEditingController(text: _note);
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _countController.dispose();
+    _noteController.dispose();
     super.dispose();
   }
 
+  String _formatCount(double value) =>
+      value == value.truncateToDouble() ? value.toInt().toString() : '$value';
+
+  void _setCount(double value) {
+    final next =
+        _isYesNo
+            ? value.clamp(0, 1).toDouble()
+            : value.clamp(0, 999999).toDouble();
+    setState(() {
+      _count = next;
+      _countController.text = _formatCount(next);
+    });
+  }
+
+  void _readCount(String value) {
+    final parsed = double.tryParse(value);
+    setState(() => _count = (parsed ?? 0).clamp(0, 999999).toDouble());
+  }
+
+  Future<void> _editNote() async {
+    setState(() => _isEditingNote = true);
+  }
+
+  Future<bool> _saveNote() async {
+    try {
+      await widget.repository.saveNote(
+        _habit.id,
+        widget.today,
+        _noteController.text,
+      );
+      if (mounted) {
+        setState(() {
+          _note = _noteController.text.trim();
+          _isEditingNote = false;
+        });
+      }
+      return true;
+    } catch (_) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Your note could not be saved.')),
+      );
+      return false;
+    }
+  }
+
+  Future<void> _saveTracking() async {
+    if (_noteController.text.trim() != _note && !await _saveNote()) return;
+    if (mounted) Navigator.of(context).pop(_count);
+  }
+
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(
-      'Today’s ${widget.habit.unit.isEmpty ? 'total' : widget.habit.unit}',
-    ),
-    content: TextField(
-      controller: _controller,
-      autofocus: true,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-      decoration: const InputDecoration(labelText: 'Total'),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
+  Widget build(BuildContext context) {
+    final accent = Color(_habit.colorValue);
+    final unit = _habit.unit.isEmpty ? 'times' : _habit.unit;
+    final percent = (_progress * 100).round();
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF171719),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+            border: Border.all(
+              color: AppColors.coolGrey.withValues(alpha: 0.16),
+            ),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 48,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: AppColors.coolGrey.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(17),
+                      ),
+                      child: Icon(
+                        habitIcon(_habit.icon),
+                        color: accent,
+                        size: 28,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _habit.name,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          if (_habit.description.isNotEmpty)
+                            Text(
+                              _habit.description,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.coolGrey),
+                            ),
+                          const SizedBox(height: 3),
+                          Text(
+                            'Today  ·  ${_dateLabel(widget.today)}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: AppColors.coolGrey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                if (_isYesNo)
+                  _yesNoControls()
+                else
+                  Row(
+                    children: [
+                      _stepButton(
+                        Icons.remove_rounded,
+                        'Decrease amount',
+                        () => _setCount(_count - 1),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Container(
+                          height: 82,
+                          decoration: BoxDecoration(
+                            color: AppColors.charcoalGrey,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: AppColors.coolGrey.withValues(alpha: 0.15),
+                            ),
+                          ),
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 112,
+                                child: TextField(
+                                  key: const Key('tracking-count'),
+                                  controller: _countController,
+                                  onChanged: _readCount,
+                                  keyboardType: TextInputType.numberWithOptions(
+                                    decimal:
+                                        _habit.trackingMode ==
+                                        TrackingMode.measure,
+                                  ),
+                                  inputFormatters: [
+                                    _habit.trackingMode == TrackingMode.measure
+                                        ? FilteringTextInputFormatter.allow(
+                                          RegExp(r'[0-9.]'),
+                                        )
+                                        : FilteringTextInputFormatter
+                                            .digitsOnly,
+                                  ],
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineMedium
+                                      ?.copyWith(fontWeight: FontWeight.w700),
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    isCollapsed: true,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                unit,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(color: AppColors.coolGrey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      _stepButton(
+                        Icons.add_rounded,
+                        'Increase amount',
+                        () => _setCount(_count + 1),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 14),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: LinearProgressIndicator(
+                    value: _progress,
+                    minHeight: 7,
+                    backgroundColor: AppColors.coolGrey.withValues(alpha: 0.2),
+                    color: accent,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _goalLabel(unit),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.coolGrey,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '$percent%',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppColors.coolGrey,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                if (!_isYesNo) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _quickButton('+1', () => _setCount(_count + 1)),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _quickButton('+5', () => _setCount(_count + 5)),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _quickButton(
+                          'Goal',
+                          () => _setCount(_habit.target),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _quickButton('Reset', () => _setCount(0)),
+                      ),
+                    ],
+                  ),
+                ],
+                if (_isEditingNote) ...[
+                  const SizedBox(height: 14),
+                  TextField(
+                    key: const Key('tracking-note-input'),
+                    controller: _noteController,
+                    autofocus: true,
+                    maxLines: 3,
+                    maxLength: 500,
+                    decoration: const InputDecoration(
+                      labelText: "Today's note",
+                      hintText: 'Add a note about today',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: _saveNote,
+                      icon: const Icon(Icons.save_rounded),
+                      label: const Text('Save note'),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    IconButton.filledTonal(
+                      key: const Key('tracking-note'),
+                      tooltip: _isEditingNote
+                          ? 'Editing note'
+                          : (_note.isEmpty ? 'Add note' : 'Edit note'),
+                      onPressed: _isEditingNote ? null : _editNote,
+                      icon: Icon(
+                        _note.isEmpty
+                            ? Icons.edit_note_rounded
+                            : Icons.sticky_note_2_rounded,
+                      ),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(56, 56),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SizedBox(
+                        height: 56,
+                        child: FilledButton(
+                          key: const Key('tracking-save'),
+                          onPressed: _saveTracking,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: accent,
+                            foregroundColor: AppColors.carbon,
+                            shape: const StadiumBorder(),
+                          ),
+                          child: Text(
+                            _saveLabel(unit),
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      FilledButton(
-        onPressed: () {
-          final value = double.tryParse(_controller.text);
-          if (value != null && value >= 0) Navigator.pop(context, value);
-        },
-        child: const Text('Save'),
+    );
+  }
+
+  Widget _yesNoControls() => Row(
+    children: [
+      Expanded(
+        child: _quickButton(
+          _isQuit ? 'Slip-free' : 'Not done',
+          () => _setCount(0),
+          selected: _count == 0,
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _quickButton(
+          _isQuit ? 'Slip recorded' : 'Done',
+          () => _setCount(1),
+          selected: _count > 0,
+        ),
       ),
     ],
   );
+
+  Widget _stepButton(IconData icon, String tooltip, VoidCallback onPressed) =>
+      SizedBox(
+        width: 58,
+        height: 82,
+        child: OutlinedButton(
+          onPressed: onPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.offWhite,
+            side: BorderSide(color: AppColors.coolGrey.withValues(alpha: 0.18)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(17),
+            ),
+            padding: EdgeInsets.zero,
+          ),
+          child: Tooltip(message: tooltip, child: Icon(icon, size: 24)),
+        ),
+      );
+
+  Widget _quickButton(
+    String label,
+    VoidCallback onPressed, {
+    bool selected = false,
+  }) => OutlinedButton(
+    onPressed: onPressed,
+    style: OutlinedButton.styleFrom(
+      foregroundColor: selected ? AppColors.offWhite : AppColors.coolGrey,
+      backgroundColor: selected ? AppColors.charcoalGrey : Colors.transparent,
+      side: BorderSide(color: AppColors.coolGrey.withValues(alpha: 0.16)),
+      shape: const StadiumBorder(),
+      padding: const EdgeInsets.symmetric(vertical: 13),
+    ),
+    child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+  );
+
+  String _goalLabel(String unit) {
+    if (_isQuit) return 'Goal 0 $unit';
+    return 'Goal ${_formatCount(_goal)} $unit';
+  }
+
+  String _saveLabel(String unit) {
+    if (_isYesNo) {
+      final selected = _count > 0;
+      return _isQuit
+          ? (selected ? 'Save slip' : 'Save slip-free day')
+          : (selected ? 'Save as done' : 'Save as not done');
+    }
+    return 'Save ${_formatCount(_count)} $unit';
+  }
+
+  String _dateLabel(DateTime date) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${weekdays[date.weekday - 1]}, ${date.day} ${months[date.month - 1]}';
+  }
 }
 
 class _HabitCard extends StatelessWidget {

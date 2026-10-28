@@ -8,6 +8,7 @@ import 'package:rize/presentation/home_screen.dart';
 class _MemoryHabitRepository extends HabitRepository {
   List<Habit> habits = [];
   final Map<String, String> notes = {};
+  bool failSavingNotes = false;
 
   @override
   Future<List<Habit>> loadHabits() async => habits;
@@ -22,6 +23,7 @@ class _MemoryHabitRepository extends HabitRepository {
 
   @override
   Future<void> saveNote(String habitId, DateTime day, String content) async {
+    if (failSavingNotes) throw StateError('Unable to save note');
     final key = dayKey(day);
     if (content.isEmpty) {
       notes.remove(key);
@@ -61,6 +63,10 @@ void main() {
 
       await tester.tap(find.byTooltip('Track today'));
       await tester.pumpAndSettle();
+      expect(find.text('Today'), findsOneWidget);
+      await tester.tap(find.text('+1'));
+      await tester.tap(find.byKey(const Key('tracking-save')));
+      await tester.pumpAndSettle();
       expect(repository.habits.single.countOn(DateTime.now()), 1);
 
       await tester.tap(find.text('Drink water'));
@@ -70,7 +76,7 @@ void main() {
 
       await tester.drag(find.byType(ListView), const Offset(0, -600));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Add note'));
+      await tester.tap(find.byTooltip('Add note for selected day'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'A note for today');
       await tester.tap(find.text('Save'));
@@ -91,6 +97,81 @@ void main() {
     },
   );
 
+  testWidgets('notes preview, list, add, edit, delete, and stay in sync', (
+    tester,
+  ) async {
+    final today = DateTime.now();
+    final repository =
+        _MemoryHabitRepository()
+          ..habits = [const Habit(id: 'read', name: 'Read')]
+          ..notes[dayKey(today)] = 'Today note'
+          ..notes[dayKey(today.subtract(const Duration(days: 1)))] =
+              'Yesterday note'
+          ..notes[dayKey(today.subtract(const Duration(days: 2)))] =
+              'Two days ago'
+          ..notes[dayKey(today.subtract(const Duration(days: 5)))] = 'Old note';
+
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Read'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('notes-count')),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+
+    expect(tester.widget<Text>(find.byKey(const Key('notes-count'))).data, '4');
+    expect(find.text('Today note'), findsOneWidget);
+    expect(find.text('Two days ago'), findsOneWidget);
+    expect(find.text('Old note'), findsNothing);
+
+    await tester.tap(find.text('All notes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Old note'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Edit note').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Updated today');
+    repository.failSavingNotes = true;
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Your note could not be saved. Please try again.'),
+      findsOneWidget,
+    );
+    expect(find.text('Updated today'), findsOneWidget);
+
+    repository.failSavingNotes = false;
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(repository.notes[dayKey(today)], 'Updated today');
+
+    await tester.tap(find.byTooltip('Add note for a date'));
+    await tester.pumpAndSettle();
+    final addedDay = today.subtract(const Duration(days: 3));
+    await tester.tap(find.text('${addedDay.day}'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Added on another day');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(repository.notes[dayKey(addedDay)], 'Added on another day');
+
+    await tester.tap(find.byTooltip('Edit note').at(3));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(repository.notes.containsKey(dayKey(addedDay)), isFalse);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(find.byKey(const Key('notes-count'))).data, '4');
+    expect(find.text('Updated today'), findsOneWidget);
+    expect(find.text('Added on another day'), findsNothing);
+  });
+
   testWidgets('the card corner records a quit habit slip', (tester) async {
     final repository =
         _MemoryHabitRepository()
@@ -109,6 +190,9 @@ void main() {
 
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isTrue);
     await tester.tap(find.byTooltip('Record a slip'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Slip recorded'));
+    await tester.tap(find.byKey(const Key('tracking-save')));
     await tester.pumpAndSettle();
     expect(repository.habits.single.countOn(DateTime.now()), 1);
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isFalse);
@@ -136,12 +220,99 @@ void main() {
 
     await tester.tap(find.byTooltip('Track today'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), '7.5');
-    await tester.tap(find.text('Save'));
+    await tester.enterText(find.byKey(const Key('tracking-count')), '7.5');
+    await tester.tap(find.byKey(const Key('tracking-save')));
     await tester.pumpAndSettle();
 
     expect(repository.habits.single.countOn(DateTime.now()), 7.5);
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isTrue);
+  });
+
+  testWidgets('tracking sheet quick actions save the selected count', (
+    tester,
+  ) async {
+    final repository =
+        _MemoryHabitRepository()
+          ..habits = [
+            const Habit(
+              id: 'read',
+              name: 'Read',
+              target: 3,
+              unit: 'pages',
+              dailyCounts: {},
+            ).copyWith(dailyCounts: {dayKey(DateTime.now()): 1}),
+          ];
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Track today'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('+5'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('tracking-count')))
+          .controller!
+          .text,
+      '6',
+    );
+    await tester.tap(find.text('Goal'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('tracking-count')))
+          .controller!
+          .text,
+      '3',
+    );
+    await tester.tap(find.text('+1'));
+    await tester.tap(find.text('Reset'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('tracking-count')))
+          .controller!
+          .text,
+      '0',
+    );
+    await tester.tap(find.text('+5'));
+    await tester.tap(find.byKey(const Key('tracking-save')));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.countOn(DateTime.now()), 5);
+  });
+
+  testWidgets('yes-no tracking can be saved as done or dismissed unchanged', (
+    tester,
+  ) async {
+    final repository =
+        _MemoryHabitRepository()
+          ..habits = [
+            const Habit(
+              id: 'stretch',
+              name: 'Stretch',
+              trackingMode: TrackingMode.yesNo,
+            ),
+          ];
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Mark complete'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.countOn(DateTime.now()), 0);
+
+    await tester.tap(find.byTooltip('Mark complete'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.tap(find.byKey(const Key('tracking-save')));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.countOn(DateTime.now()), 1);
   });
 
   testWidgets('streak period selection retains weekly and monthly targets', (

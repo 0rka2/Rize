@@ -64,7 +64,8 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
       text: (habit?.target ?? 1).toString(),
     );
     _unitController = TextEditingController(
-      text: habit?.trackingMode == TrackingMode.measure ? habit?.unit ?? '' : '',
+      text:
+          habit?.trackingMode == TrackingMode.measure ? habit?.unit ?? '' : '',
     );
     _colorValue = habit?.colorValue ?? _colors.first.toARGB32();
     _icon = habit?.icon ?? 'spa';
@@ -113,7 +114,12 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
         type: _type,
         trackingMode: _trackingMode,
         target: target ?? 1,
-        unit: _trackingMode == TrackingMode.measure ? unit : '',
+        unit:
+            _trackingMode == TrackingMode.measure
+                ? unit
+                : _trackingMode == TrackingMode.count
+                ? 'times'
+                : '',
         tapAction: _tapAction,
         goalPeriod: _goalPeriod,
         weeklyGoalTarget: _weeklyGoalTarget,

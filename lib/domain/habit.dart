@@ -93,7 +93,10 @@ class Habit {
   Habit toggleDay(DateTime day) => setCount(day, countOn(day) > 0 ? 0 : 1);
 
   Habit setCount(DateTime day, double count) {
-    final updatedCounts = Map<String, double>.from(dailyCounts);
+    final updatedCounts = {
+      for (final entry in dailyCounts.entries)
+        entry.key: entry.value.toDouble(),
+    };
     final key = dayKey(day);
     if (count <= 0) {
       updatedCounts.remove(key);
