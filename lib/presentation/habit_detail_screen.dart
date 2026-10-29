@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/habit_repository.dart';
 import '../domain/habit.dart';
 import '../theme/app_colors.dart';
+import 'habit_heatmap.dart';
 import 'habit_icons.dart';
 
 class HabitDetailScreen extends StatefulWidget {
@@ -10,12 +11,14 @@ class HabitDetailScreen extends StatefulWidget {
     required this.habit,
     required this.repository,
     required this.onEdit,
+    required this.onTrackDay,
     super.key,
   });
 
   final Habit habit;
   final HabitRepository repository;
   final Future<Habit?> Function() onEdit;
+  final Future<Habit?> Function(DateTime day) onTrackDay;
 
   @override
   State<HabitDetailScreen> createState() => _HabitDetailScreenState();
@@ -25,6 +28,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   late Habit _habit;
   late DateTime _selectedDay;
   late DateTime _visibleMonth;
+  int _heatmapPage = 0;
   Map<String, String> _notes = {};
   bool _loadingNotes = true;
   bool _noteError = false;
@@ -129,17 +133,39 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     });
   }
 
+  void _changeHeatmapPage(int offset) {
+    setState(() => _heatmapPage += offset);
+  }
+
   void _selectDay(DateTime day) {
     setState(() {
       _selectedDay = DateTime(day.year, day.month, day.day);
       _visibleMonth = DateTime(day.year, day.month);
+      _heatmapPage = _heatmapPageForDay(_selectedDay);
     });
+  }
+
+  int _heatmapPageForDay(DateTime day) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var page = 0;
+    while (day.isBefore(_heatmapStart(today, page))) {
+      page--;
+    }
+    while (day.isAfter(_addMonths(today, page * 6))) {
+      page++;
+    }
+    return page;
   }
 
   @override
   Widget build(BuildContext context) {
     final color = Color(_habit.colorValue);
     final recentNotes = _sortedNotes().take(3).toList();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final heatmapEnd = _addMonths(today, _heatmapPage * 6);
+    final heatmapStart = _heatmapStart(today, _heatmapPage);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Habit'),
@@ -191,6 +217,22 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               ],
             ),
             const SizedBox(height: 22),
+            _HeatmapCard(
+              habit: _habit,
+              noteDays: _notes.keys.toSet(),
+              startDate: heatmapStart,
+              endDate: heatmapEnd,
+              selectedDay: _selectedDay,
+              onPreviousPage: () => _changeHeatmapPage(-1),
+              onNextPage: () => _changeHeatmapPage(1),
+              onSelectDay: _selectDay,
+            ),
+            const SizedBox(height: 12),
+            HabitProgressIndicators(
+              streakLabel: _streakLabel(_habit, today),
+              goalLabel: _periodProgressLabel(_habit, today),
+            ),
+            const SizedBox(height: 18),
             _CalendarCard(
               habit: _habit,
               noteDays: _notes.keys.toSet(),
@@ -200,6 +242,17 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               onPreviousMonth: () => _changeMonth(-1),
               onNextMonth: () => _changeMonth(1),
               onSelectDay: _selectDay,
+              onTrackDay: (day) async {
+                _selectDay(day);
+                final updated = await widget.onTrackDay(day);
+                if (updated != null && mounted) {
+                  setState(() => _habit = updated);
+                }
+              },
+              onEditNoteForDay: (day) {
+                _selectDay(day);
+                _editNoteForDay(day);
+              },
               onEditSelectedNote: _editNote,
             ),
             const SizedBox(height: 18),
@@ -644,6 +697,53 @@ DateTime _dateFromKey(String key) {
   return DateTime(parts[0], parts[1], parts[2]);
 }
 
+class _HeatmapCard extends StatelessWidget {
+  const _HeatmapCard({
+    required this.habit,
+    required this.noteDays,
+    required this.startDate,
+    required this.endDate,
+    required this.selectedDay,
+    required this.onPreviousPage,
+    required this.onNextPage,
+    required this.onSelectDay,
+  });
+
+  final Habit habit;
+  final Set<String> noteDays;
+  final DateTime startDate;
+  final DateTime endDate;
+  final DateTime selectedDay;
+  final VoidCallback onPreviousPage;
+  final VoidCallback onNextPage;
+  final ValueChanged<DateTime> onSelectDay;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+    decoration: BoxDecoration(
+      color: AppColors.charcoalGrey,
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
+    ),
+    child: GestureDetector(
+      onHorizontalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity < -100) onNextPage();
+        if (velocity > 100) onPreviousPage();
+      },
+      child: HabitHeatmap(
+        habit: habit,
+        startDate: startDate,
+        endDate: endDate,
+        selectedDay: selectedDay,
+        noteDays: noteDays,
+        onSelectDay: onSelectDay,
+      ),
+    ),
+  );
+}
+
 class _CalendarCard extends StatelessWidget {
   const _CalendarCard({
     required this.habit,
@@ -654,6 +754,8 @@ class _CalendarCard extends StatelessWidget {
     required this.onPreviousMonth,
     required this.onNextMonth,
     required this.onSelectDay,
+    required this.onTrackDay,
+    required this.onEditNoteForDay,
     required this.onEditSelectedNote,
   });
 
@@ -665,6 +767,8 @@ class _CalendarCard extends StatelessWidget {
   final VoidCallback onPreviousMonth;
   final VoidCallback onNextMonth;
   final ValueChanged<DateTime> onSelectDay;
+  final ValueChanged<DateTime> onTrackDay;
+  final ValueChanged<DateTime> onEditNoteForDay;
   final VoidCallback onEditSelectedNote;
 
   @override
@@ -753,8 +857,10 @@ class _CalendarCard extends StatelessWidget {
                       : accent;
               return InkWell(
                 borderRadius: BorderRadius.circular(12),
-                onTap: () => onSelectDay(day),
+                onTap: () => onTrackDay(day),
+                onLongPress: () => onEditNoteForDay(day),
                 child: Container(
+                  key: ValueKey('calendar-day-${dayKey(day)}'),
                   decoration: BoxDecoration(
                     color:
                         isSelected
@@ -878,3 +984,40 @@ String _periodProgressLabel(Habit habit, DateTime day) {
       '${reached ? 'Goal reached · ' : ''}$progress / ${habit.monthlyGoalTarget} days this month',
   };
 }
+
+String _streakLabel(Habit habit, DateTime today) {
+  if (habit.type != HabitType.quit) {
+    final streak = habit.currentStreak(today);
+    return '$streak ${streak == 1 ? 'day' : 'days'}';
+  }
+
+  final todayKey = dayKey(today);
+  final slipDays =
+      habit.dailyCounts.entries
+          .where(
+            (entry) => entry.value > 0 && entry.key.compareTo(todayKey) <= 0,
+          )
+          .map((entry) => entry.key)
+          .toList()
+        ..sort();
+  if (slipDays.isEmpty) return 'No slips yet';
+
+  final parts = slipDays.last.split('-').map(int.parse).toList();
+  final lastSlip = DateTime(parts[0], parts[1], parts[2]);
+  final streak =
+      DateTime(today.year, today.month, today.day).difference(lastSlip).inDays;
+  return '$streak ${streak == 1 ? 'day' : 'days'}';
+}
+
+DateTime _addMonths(DateTime date, int months) {
+  final firstOfMonth = DateTime(date.year, date.month + months, 1);
+  final lastDay = DateTime(firstOfMonth.year, firstOfMonth.month + 1, 0).day;
+  return DateTime(
+    firstOfMonth.year,
+    firstOfMonth.month,
+    date.day > lastDay ? lastDay : date.day,
+  );
+}
+
+DateTime _heatmapStart(DateTime today, int page) =>
+    _addMonths(_addMonths(today, page * 6), -6).add(const Duration(days: 1));
