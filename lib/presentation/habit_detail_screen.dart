@@ -950,12 +950,16 @@ class _CalendarCard extends StatelessWidget {
                 onPressed: onEditSelectedNote,
                 icon: const Icon(Icons.edit_note_rounded),
               ),
-              const Spacer(),
-              Text(
-                _periodProgressLabel(habit, selectedDay),
-                style: Theme.of(
-                  context,
-                ).textTheme.labelMedium?.copyWith(color: AppColors.coolGrey),
+              Expanded(
+                child: Text(
+                  _periodProgressLabel(habit, selectedDay),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelMedium?.copyWith(color: AppColors.coolGrey),
+                ),
               ),
             ],
           ),
