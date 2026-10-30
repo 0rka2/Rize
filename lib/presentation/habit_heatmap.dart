@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 
-class HabitHeatmap extends StatelessWidget {
+class HabitHeatmap extends StatefulWidget {
   const HabitHeatmap({
     required this.habit,
     required this.startDate,
@@ -13,6 +13,7 @@ class HabitHeatmap extends StatelessWidget {
     this.selectedDay,
     this.noteDays = const {},
     this.onSelectDay,
+    this.scrollable = false,
     super.key,
   });
 
@@ -24,11 +25,60 @@ class HabitHeatmap extends StatelessWidget {
   final DateTime? selectedDay;
   final Set<String> noteDays;
   final ValueChanged<DateTime>? onSelectDay;
+  final bool scrollable;
+
+  @override
+  State<HabitHeatmap> createState() => _HabitHeatmapState();
+}
+
+class _HabitHeatmapState extends State<HabitHeatmap> {
+  final ScrollController _scrollController = ScrollController();
+  bool _initialScrollScheduled = false;
+
+  @override
+  void didUpdateWidget(HabitHeatmap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final dateRangeChanged =
+        oldWidget.startDate != widget.startDate ||
+        oldWidget.endDate != widget.endDate;
+    final wasAtLatestDates =
+        _scrollController.hasClients &&
+        _scrollController.position.maxScrollExtent -
+                _scrollController.position.pixels <
+            1;
+    if (widget.scrollable && dateRangeChanged && wasAtLatestDates) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final start = DateTime(startDate.year, startDate.month, startDate.day);
-    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    final habit = widget.habit;
+    final showMonthLabels = widget.showMonthLabels;
+    final showWeekdayLabels = widget.showWeekdayLabels;
+    final selectedDay = widget.selectedDay;
+    final noteDays = widget.noteDays;
+    final onSelectDay = widget.onSelectDay;
+    final start = DateTime(
+      widget.startDate.year,
+      widget.startDate.month,
+      widget.startDate.day,
+    );
+    final end = DateTime(
+      widget.endDate.year,
+      widget.endDate.month,
+      widget.endDate.day,
+    );
     final gridStart = DateTime(
       start.year,
       start.month,
@@ -50,54 +100,48 @@ class HabitHeatmap extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final cellSize =
-            ((constraints.maxWidth - labelWidth - (weekCount - 1) * gap) /
-                    weekCount)
-                .clamp(5.0, 14.0)
-                .toDouble();
-        return Column(
+            widget.scrollable
+                ? 11.0
+                : ((constraints.maxWidth - labelWidth - (weekCount - 1) * gap) /
+                        weekCount)
+                    .clamp(5.0, 14.0)
+                    .toDouble();
+        final gridWidth = cellSize * weekCount + gap * (weekCount - 1);
+        final labels = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (showMonthLabels) ...[
-              Row(
-                children: [
-                  if (showWeekdayLabels) SizedBox(width: labelWidth),
-                  SizedBox(
-                    width: cellSize * weekCount + gap * (weekCount - 1),
-                    height: 14,
-                    child: Stack(
-                      children: [
-                        for (var week = 0; week < weekCount; week++)
-                          if (_monthLabel(
-                            gridStart,
+              SizedBox(
+                width: gridWidth,
+                height: 14,
+                child: Stack(
+                  children: [
+                    for (var week = 0; week < weekCount; week++)
+                      if (_monthLabel(gridStart, week, start, end).isNotEmpty)
+                        Positioned(
+                          left: _monthLabelPosition(
                             week,
-                            start,
-                            end,
-                          ).isNotEmpty)
-                            Positioned(
-                              left: _monthLabelPosition(
-                                week,
-                                cellSize,
-                                gap,
-                                weekCount,
-                              ),
-                              top: 0,
-                              width: 30,
-                              height: 14,
-                              child: Text(
-                                _monthLabel(gridStart, week, start, end),
-                                maxLines: 1,
-                                softWrap: false,
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.labelSmall?.copyWith(
-                                  color: AppColors.coolGrey,
-                                  fontSize: 10,
-                                ),
-                              ),
+                            cellSize,
+                            gap,
+                            weekCount,
+                          ),
+                          top: 0,
+                          width: 30,
+                          height: 14,
+                          child: Text(
+                            _monthLabel(gridStart, week, start, end),
+                            maxLines: 1,
+                            softWrap: false,
+                            style: Theme.of(
+                              context,
+                            ).textTheme.labelSmall?.copyWith(
+                              color: AppColors.coolGrey,
+                              fontSize: 10,
                             ),
-                      ],
-                    ),
-                  ),
-                ],
+                          ),
+                        ),
+                  ],
+                ),
               ),
               const SizedBox(height: 5),
             ],
@@ -105,24 +149,6 @@ class HabitHeatmap extends StatelessWidget {
               if (weekday > 0) const SizedBox(height: gap),
               Row(
                 children: [
-                  if (showWeekdayLabels)
-                    SizedBox(
-                      width: labelWidth,
-                      child: Text(
-                        const [
-                          'Mo',
-                          'Tu',
-                          'We',
-                          'Th',
-                          'Fr',
-                          'Sa',
-                          'Su',
-                        ][weekday],
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: AppColors.coolGrey,
-                        ),
-                      ),
-                    ),
                   for (var week = 0; week < weekCount; week++) ...[
                     if (week > 0) const SizedBox(width: gap),
                     _HeatmapDay(
@@ -153,6 +179,109 @@ class HabitHeatmap extends StatelessWidget {
                 ],
               ),
             ],
+          ],
+        );
+
+        if (!widget.scrollable) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (showWeekdayLabels)
+                SizedBox(
+                  width: labelWidth,
+                  child: Column(
+                    children: [
+                      if (showMonthLabels) ...[const SizedBox(height: 19)],
+                      for (var weekday = 0; weekday < 7; weekday++) ...[
+                        if (weekday > 0) const SizedBox(height: gap),
+                        SizedBox(
+                          height: cellSize,
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: Text(
+                              const [
+                                'Mo',
+                                'Tu',
+                                'We',
+                                'Th',
+                                'Fr',
+                                'Sa',
+                                'Su',
+                              ][weekday],
+                              style: Theme.of(
+                                context,
+                              ).textTheme.labelSmall?.copyWith(
+                                color: AppColors.coolGrey,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              labels,
+            ],
+          );
+        }
+
+        if (!_initialScrollScheduled) {
+          _initialScrollScheduled = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController.jumpTo(
+                _scrollController.position.maxScrollExtent,
+              );
+            }
+          });
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showWeekdayLabels)
+              SizedBox(
+                width: labelWidth,
+                child: Column(
+                  children: [
+                    if (showMonthLabels) const SizedBox(height: 19),
+                    for (var weekday = 0; weekday < 7; weekday++) ...[
+                      if (weekday > 0) const SizedBox(height: gap),
+                      SizedBox(
+                        height: cellSize,
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          child: Text(
+                            const [
+                              'Mo',
+                              'Tu',
+                              'We',
+                              'Th',
+                              'Fr',
+                              'Sa',
+                              'Su',
+                            ][weekday],
+                            style: Theme.of(
+                              context,
+                            ).textTheme.labelSmall?.copyWith(
+                              color: AppColors.coolGrey,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                scrollDirection: Axis.horizontal,
+                child: labels,
+              ),
+            ),
           ],
         );
       },

@@ -7,7 +7,7 @@ import '../domain/habit.dart';
 
 class HabitRepository {
   static const _databaseName = 'rize.db';
-  static const _databaseVersion = 4;
+  static const _databaseVersion = 5;
 
   Future<Database>? _database;
 
@@ -37,6 +37,7 @@ class HabitRepository {
             goal_period TEXT NOT NULL DEFAULT 'none',
             weekly_goal_target INTEGER NOT NULL DEFAULT 1,
             monthly_goal_target INTEGER NOT NULL DEFAULT 1
+            ,start_date TEXT
           )
         ''');
         await database.execute('''
@@ -127,6 +128,9 @@ class HabitRepository {
             'ALTER TABLE habits ADD COLUMN monthly_goal_target INTEGER NOT NULL DEFAULT 1',
           );
         }
+        if (oldVersion < 5) {
+          await database.execute('ALTER TABLE habits ADD COLUMN start_date TEXT');
+        }
       },
     );
   }
@@ -176,6 +180,10 @@ class HabitRepository {
             ),
             weeklyGoalTarget: row['weekly_goal_target'] as int,
             monthlyGoalTarget: row['monthly_goal_target'] as int,
+            startDate:
+                row['start_date'] == null
+                    ? null
+                    : DateTime.parse(row['start_date'] as String),
             dailyCounts: countsByHabit[row['id']] ?? const <String, double>{},
           ),
         )
@@ -298,5 +306,6 @@ class HabitRepository {
     'goal_period': enumValue(habit.goalPeriod),
     'weekly_goal_target': habit.weeklyGoalTarget,
     'monthly_goal_target': habit.monthlyGoalTarget,
+    'start_date': habit.startDate == null ? null : dayKey(habit.startDate!),
   };
 }

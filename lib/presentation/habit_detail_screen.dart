@@ -28,7 +28,6 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   late Habit _habit;
   late DateTime _selectedDay;
   late DateTime _visibleMonth;
-  int _heatmapPage = 0;
   Map<String, String> _notes = {};
   bool _loadingNotes = true;
   bool _noteError = false;
@@ -133,29 +132,11 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     });
   }
 
-  void _changeHeatmapPage(int offset) {
-    setState(() => _heatmapPage += offset);
-  }
-
   void _selectDay(DateTime day) {
     setState(() {
       _selectedDay = DateTime(day.year, day.month, day.day);
       _visibleMonth = DateTime(day.year, day.month);
-      _heatmapPage = _heatmapPageForDay(_selectedDay);
     });
-  }
-
-  int _heatmapPageForDay(DateTime day) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    var page = 0;
-    while (day.isBefore(_heatmapStart(today, page))) {
-      page--;
-    }
-    while (day.isAfter(_addMonths(today, page * 6))) {
-      page++;
-    }
-    return page;
   }
 
   @override
@@ -164,8 +145,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     final recentNotes = _sortedNotes().take(3).toList();
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final heatmapEnd = _addMonths(today, _heatmapPage * 6);
-    final heatmapStart = _heatmapStart(today, _heatmapPage);
+    final heatmapStart = _heatmapStart(today);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Habit'),
@@ -221,10 +201,8 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               habit: _habit,
               noteDays: _notes.keys.toSet(),
               startDate: heatmapStart,
-              endDate: heatmapEnd,
+              endDate: today,
               selectedDay: _selectedDay,
-              onPreviousPage: () => _changeHeatmapPage(-1),
-              onNextPage: () => _changeHeatmapPage(1),
               onSelectDay: _selectDay,
             ),
             const SizedBox(height: 12),
@@ -704,8 +682,6 @@ class _HeatmapCard extends StatelessWidget {
     required this.startDate,
     required this.endDate,
     required this.selectedDay,
-    required this.onPreviousPage,
-    required this.onNextPage,
     required this.onSelectDay,
   });
 
@@ -714,8 +690,6 @@ class _HeatmapCard extends StatelessWidget {
   final DateTime startDate;
   final DateTime endDate;
   final DateTime selectedDay;
-  final VoidCallback onPreviousPage;
-  final VoidCallback onNextPage;
   final ValueChanged<DateTime> onSelectDay;
 
   @override
@@ -726,20 +700,14 @@ class _HeatmapCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(22),
       border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
     ),
-    child: GestureDetector(
-      onHorizontalDragEnd: (details) {
-        final velocity = details.primaryVelocity ?? 0;
-        if (velocity < -100) onNextPage();
-        if (velocity > 100) onPreviousPage();
-      },
-      child: HabitHeatmap(
-        habit: habit,
-        startDate: startDate,
-        endDate: endDate,
-        selectedDay: selectedDay,
-        noteDays: noteDays,
-        onSelectDay: onSelectDay,
-      ),
+    child: HabitHeatmap(
+      habit: habit,
+      startDate: startDate,
+      endDate: endDate,
+      selectedDay: selectedDay,
+      noteDays: noteDays,
+      onSelectDay: onSelectDay,
+      scrollable: true,
     ),
   );
 }
@@ -1023,5 +991,4 @@ DateTime _addMonths(DateTime date, int months) {
   );
 }
 
-DateTime _heatmapStart(DateTime today, int page) =>
-    _addMonths(_addMonths(today, page * 6), -6).add(const Duration(days: 1));
+DateTime _heatmapStart(DateTime today) => _addMonths(today, -12);

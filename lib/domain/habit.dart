@@ -51,6 +51,7 @@ class Habit {
     this.goalPeriod = GoalPeriod.none,
     this.weeklyGoalTarget = 1,
     this.monthlyGoalTarget = 1,
+    this.startDate,
     this.dailyCounts = const {},
   });
 
@@ -67,13 +68,19 @@ class Habit {
   final GoalPeriod goalPeriod;
   final int weeklyGoalTarget;
   final int monthlyGoalTarget;
+  final DateTime? startDate;
   final Map<String, num> dailyCounts;
 
   double countOn(DateTime day) => (dailyCounts[dayKey(day)] ?? 0).toDouble();
 
   bool isCompleteOn(DateTime day) {
     final count = countOn(day);
-    if (type == HabitType.quit) return count == 0;
+    if (type == HabitType.quit) {
+      final started = startDate ?? DateTime.now();
+      final startedDay = DateTime(started.year, started.month, started.day);
+      final checkedDay = DateTime(day.year, day.month, day.day);
+      return !checkedDay.isBefore(startedDay) && count == 0;
+    }
     if (trackingMode == TrackingMode.yesNo) return count > 0;
     return count >= target;
   }
@@ -176,6 +183,7 @@ class Habit {
     GoalPeriod? goalPeriod,
     int? weeklyGoalTarget,
     int? monthlyGoalTarget,
+    DateTime? startDate,
     Map<String, num>? dailyCounts,
   }) => Habit(
     id: id,
@@ -191,6 +199,7 @@ class Habit {
     goalPeriod: goalPeriod ?? this.goalPeriod,
     weeklyGoalTarget: weeklyGoalTarget ?? this.weeklyGoalTarget,
     monthlyGoalTarget: monthlyGoalTarget ?? this.monthlyGoalTarget,
+    startDate: startDate ?? this.startDate,
     dailyCounts: dailyCounts ?? this.dailyCounts,
   );
 

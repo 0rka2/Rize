@@ -99,6 +99,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<Habit?> _trackHabit(Habit habit, [DateTime? selectedDate]) async {
     final now = DateTime.now();
     final today = selectedDate ?? DateTime(now.year, now.month, now.day);
+    if (habit.trackingMode == TrackingMode.yesNo) {
+      final updatedHabit = habit.toggleDay(today);
+      final updated =
+          _habits
+              .map((item) => item.id == habit.id ? updatedHabit : item)
+              .toList();
+      final saved = await _saveHabits(updated);
+      return saved ? updatedHabit : null;
+    }
+
     final canAddOneDirectly =
         habit.type == HabitType.build &&
         habit.trackingMode != TrackingMode.yesNo &&
@@ -881,7 +891,9 @@ class _HabitCard extends StatelessWidget {
                     child: IconButton.filled(
                       tooltip:
                           habit.type == HabitType.quit
-                              ? 'Record a slip'
+                              ? completedToday
+                                  ? 'Record a slip'
+                                  : 'Clear today’s slip'
                               : habit.trackingMode == TrackingMode.yesNo
                               ? (completedToday
                                   ? 'Mark incomplete'
