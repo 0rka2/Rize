@@ -12,6 +12,8 @@ class HabitDetailScreen extends StatefulWidget {
     required this.repository,
     required this.onEdit,
     required this.onTrackDay,
+    this.onSetSlipDay,
+    this.onSetStartDate,
     super.key,
   });
 
@@ -19,6 +21,8 @@ class HabitDetailScreen extends StatefulWidget {
   final HabitRepository repository;
   final Future<Habit?> Function() onEdit;
   final Future<Habit?> Function(DateTime day) onTrackDay;
+  final Future<Habit?> Function(DateTime day, bool isSlip)? onSetSlipDay;
+  final Future<Habit?> Function(DateTime day)? onSetStartDate;
 
   @override
   State<HabitDetailScreen> createState() => _HabitDetailScreenState();
@@ -69,6 +73,15 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     await _editNoteForDay(_selectedDay);
   }
 
+  Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
+    if (isSlip ? _habit.countOn(day) > 0 : _habit.isCompleteOn(day)) return;
+    final updated =
+        widget.onSetSlipDay == null
+            ? await widget.onTrackDay(day)
+            : await widget.onSetSlipDay!(day, isSlip);
+    if (updated != null && mounted) setState(() => _habit = updated);
+  }
+
   Future<void> _editNoteForDay(DateTime day) async {
     final key = dayKey(day);
     final savedNote = await showDialog<String>(
@@ -105,6 +118,16 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               habit: _habit,
               repository: widget.repository,
               initialNotes: _notes,
+              onSetSlipDay: (day, isSlip) async {
+                final updated =
+                    widget.onSetSlipDay == null
+                        ? await widget.onTrackDay(day)
+                        : await widget.onSetSlipDay!(day, isSlip);
+                if (updated != null && mounted) {
+                  setState(() => _habit = updated);
+                }
+                return updated;
+              },
               onNotesChanged: (notes) {
                 if (!mounted) return;
                 setState(() {
@@ -137,6 +160,32 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
       _selectedDay = DateTime(day.year, day.month, day.day);
       _visibleMonth = DateTime(day.year, day.month);
     });
+  }
+
+  Future<void> _handleCalendarDayTap(DateTime day) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final startDate = DateUtils.dateOnly(_habit.startDate ?? today);
+    final selectedDay = DateUtils.dateOnly(day);
+    _selectDay(day);
+
+    if (_habit.type == HabitType.quit &&
+        selectedDay.isBefore(startDate) &&
+        !selectedDay.isAfter(today)) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => _EarlierStartDateDialog(date: selectedDay),
+      );
+      if (confirmed != true || !mounted || widget.onSetStartDate == null) {
+        return;
+      }
+
+      final updated = await widget.onSetStartDate!(selectedDay);
+      if (updated != null && mounted) setState(() => _habit = updated);
+      return;
+    }
+
+    final updated = await widget.onTrackDay(day);
+    if (updated != null && mounted) setState(() => _habit = updated);
   }
 
   @override
@@ -220,13 +269,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               onPreviousMonth: () => _changeMonth(-1),
               onNextMonth: () => _changeMonth(1),
               onSelectDay: _selectDay,
-              onTrackDay: (day) async {
-                _selectDay(day);
-                final updated = await widget.onTrackDay(day);
-                if (updated != null && mounted) {
-                  setState(() => _habit = updated);
-                }
-              },
+              onTrackDay: _handleCalendarDayTap,
               onEditNoteForDay: (day) {
                 _selectDay(day);
                 _editNoteForDay(day);
@@ -285,7 +328,25 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
                   else
                     for (final entry in recentNotes) ...[
                       const SizedBox(height: 10),
-                      _NotePreviewCard(entry: entry),
+                      _NotePreviewCard(
+                        entry: entry,
+                        onTap:
+                            () => _showNote(
+                              context,
+                              entry,
+                              isQuit: _habit.type == HabitType.quit,
+                              isSlip:
+                                  _habit.countOn(_dateFromKey(entry.key)) > 0,
+                              isSober: _habit.isCompleteOn(
+                                _dateFromKey(entry.key),
+                              ),
+                              onSetSlip:
+                                  (isSlip) => _setSlipForDay(
+                                    _dateFromKey(entry.key),
+                                    isSlip,
+                                  ),
+                            ),
+                      ),
                     ],
                 ],
               ),
@@ -406,6 +467,7 @@ class HabitNotesScreen extends StatefulWidget {
     required this.habit,
     required this.repository,
     required this.initialNotes,
+    required this.onSetSlipDay,
     required this.onNotesChanged,
     super.key,
   });
@@ -413,6 +475,7 @@ class HabitNotesScreen extends StatefulWidget {
   final Habit habit;
   final HabitRepository repository;
   final Map<String, String> initialNotes;
+  final Future<Habit?> Function(DateTime day, bool isSlip) onSetSlipDay;
   final ValueChanged<Map<String, String>> onNotesChanged;
 
   @override
@@ -421,6 +484,7 @@ class HabitNotesScreen extends StatefulWidget {
 
 class _HabitNotesScreenState extends State<HabitNotesScreen> {
   late Map<String, String> _notes;
+  late Habit _habit;
   bool _loading = true;
   bool _loadError = false;
 
@@ -428,6 +492,7 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
   void initState() {
     super.initState();
     _notes = Map.of(widget.initialNotes);
+    _habit = widget.habit;
     _loadNotes();
   }
 
@@ -488,6 +553,12 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
     if (day != null && mounted) await _editNote(day);
   }
 
+  Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
+    if (isSlip ? _habit.countOn(day) > 0 : _habit.isCompleteOn(day)) return;
+    final updated = await widget.onSetSlipDay(day, isSlip);
+    if (updated != null && mounted) setState(() => _habit = updated);
+  }
+
   String _dateLabel(String key) {
     final parts = key.split('-').map(int.parse).toList();
     return MaterialLocalizations.of(
@@ -503,7 +574,7 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
         children: [
           const Text('Notes'),
           Text(
-            widget.habit.name,
+            _habit.name,
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: AppColors.coolGrey),
@@ -550,6 +621,23 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
                         entry: entry,
                         dateLabel: _dateLabel(entry.key),
                         onEdit: () => _editNote(_dateFromKey(entry.key)),
+                        onTap:
+                            () => _showNote(
+                              context,
+                              entry,
+                              onEdit: () => _editNote(_dateFromKey(entry.key)),
+                              isQuit: _habit.type == HabitType.quit,
+                              isSlip:
+                                  _habit.countOn(_dateFromKey(entry.key)) > 0,
+                              isSober: _habit.isCompleteOn(
+                                _dateFromKey(entry.key),
+                              ),
+                              onSetSlip:
+                                  (isSlip) => _setSlipForDay(
+                                    _dateFromKey(entry.key),
+                                    isSlip,
+                                  ),
+                            ),
                       ),
                 ],
               ),
@@ -562,88 +650,170 @@ class _FullNoteCard extends StatelessWidget {
     required this.entry,
     required this.dateLabel,
     required this.onEdit,
+    required this.onTap,
   });
 
   final MapEntry<String, String> entry;
   final String dateLabel;
   final VoidCallback onEdit;
+  final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.fromLTRB(16, 12, 10, 14),
-    decoration: BoxDecoration(
-      color: AppColors.charcoalGrey,
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: InkWell(
+      onTap: onTap,
       borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.fromLTRB(16, 12, 10, 14),
+        decoration: BoxDecoration(
+          color: AppColors.charcoalGrey,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.circle, size: 8, color: AppColors.coolGrey),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                dateLabel,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
+            Row(
+              children: [
+                Icon(Icons.circle, size: 8, color: AppColors.coolGrey),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    dateLabel,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Edit note',
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 19),
+                ),
+              ],
             ),
-            IconButton(
-              tooltip: 'Edit note',
-              onPressed: onEdit,
-              icon: const Icon(Icons.edit_outlined, size: 19),
+            Text(
+              entry.value,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyLarge,
             ),
           ],
         ),
-        Text(entry.value, style: Theme.of(context).textTheme.bodyLarge),
-      ],
+      ),
     ),
   );
 }
 
 class _NotePreviewCard extends StatelessWidget {
-  const _NotePreviewCard({required this.entry});
+  const _NotePreviewCard({required this.entry, required this.onTap});
 
   final MapEntry<String, String> entry;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final parts = entry.key.split('-').map(int.parse).toList();
     final date = DateTime(parts[0], parts[1], parts[2]);
     final label = MaterialLocalizations.of(context).formatMediumDate(date);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.carbon,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.14)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: AppColors.coolGrey,
-              fontWeight: FontWeight.w700,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.carbon,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppColors.coolGrey.withValues(alpha: 0.14),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            entry.value,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyLarge,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: AppColors.coolGrey,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                entry.value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
+}
+
+Future<void> _showNote(
+  BuildContext context,
+  MapEntry<String, String> entry, {
+  VoidCallback? onEdit,
+  bool isQuit = false,
+  bool isSlip = false,
+  bool isSober = false,
+  Future<void> Function(bool isSlip)? onSetSlip,
+}) async {
+  final parts = entry.key.split('-').map(int.parse).toList();
+  final date = DateTime(parts[0], parts[1], parts[2]);
+  await showDialog<void>(
+    context: context,
+    builder:
+        (context) => AlertDialog(
+          title: Text(MaterialLocalizations.of(context).formatMediumDate(date)),
+          content: SingleChildScrollView(child: SelectableText(entry.value)),
+          actions: [
+            if (isQuit && onSetSlip != null) ...[
+              TextButton(
+                onPressed:
+                    isSlip
+                        ? null
+                        : () async {
+                          await onSetSlip(true);
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                child: Text(isSlip ? 'Marked as slip' : 'Mark as slip'),
+              ),
+              TextButton(
+                onPressed:
+                    isSober
+                        ? null
+                        : () async {
+                          await onSetSlip(false);
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                child: Text(isSober ? 'Marked as sober' : 'Mark as sober'),
+              ),
+            ],
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+            if (onEdit != null)
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  onEdit();
+                },
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('Edit'),
+              ),
+          ],
+        ),
+  );
 }
 
 class _NoteDatePickerDialog extends StatelessWidget {
@@ -668,6 +838,36 @@ class _NoteDatePickerDialog extends StatelessWidget {
       ),
     ],
   );
+}
+
+class _EarlierStartDateDialog extends StatelessWidget {
+  const _EarlierStartDateDialog({required this.date});
+
+  final DateTime date;
+
+  @override
+  Widget build(BuildContext context) {
+    final formattedDate = MaterialLocalizations.of(
+      context,
+    ).formatMediumDate(date);
+    return AlertDialog(
+      title: const Text('Start tracking earlier?'),
+      content: Text(
+        'Days from $formattedDate on will count as clean — your streak and '
+        'graph will start there.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text('Start from $formattedDate'),
+        ),
+      ],
+    );
+  }
 }
 
 DateTime _dateFromKey(String key) {
@@ -814,14 +1014,14 @@ class _CalendarCard extends StatelessWidget {
               final isFuture = day.isAfter(localToday);
               final value = habit.countOn(day);
               final complete = !isFuture && habit.isCompleteOn(day);
-              final partial = value > 0 && !complete;
+              final slip = habit.type == HabitType.quit && value > 0;
+              final partial =
+                  value > 0 && !complete && habit.type != HabitType.quit;
               final hasNote = noteDays.contains(dayKey(day));
               final accent = Color(habit.colorValue);
               final markColor =
                   habit.type == HabitType.quit
-                      ? (value > 0
-                          ? AppColors.burntOrange
-                          : AppColors.successGreen)
+                      ? (slip ? AppColors.coolGrey : AppColors.successGreen)
                       : accent;
               return InkWell(
                 borderRadius: BorderRadius.circular(12),
@@ -862,14 +1062,16 @@ class _CalendarCard extends StatelessWidget {
                             const SizedBox(height: 2),
                             if (inMonth &&
                                 !isFuture &&
-                                (complete || partial || hasNote))
+                                (complete || partial || slip || hasNote))
                               Container(
                                 width: 5,
                                 height: 5,
                                 decoration: BoxDecoration(
                                   color:
-                                      hasNote && !complete && !partial
+                                      hasNote && !complete && !partial && !slip
                                           ? AppColors.offWhite
+                                          : slip
+                                          ? AppColors.coolGrey
                                           : partial
                                           ? markColor.withValues(alpha: 0.55)
                                           : markColor,

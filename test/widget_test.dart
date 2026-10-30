@@ -241,7 +241,11 @@ void main() {
               id: 'quit-soda',
               name: 'Quit soda',
               type: HabitType.quit,
-              dailyCounts: {dayKey(slipDay): 1},
+              startDate: today,
+              dailyCounts: {
+                dayKey(slipDay): 1,
+                dayKey(today.subtract(const Duration(days: 2))): 0,
+              },
             ),
           ];
 
@@ -260,11 +264,164 @@ void main() {
         ),
       ),
     );
-    expect((slip.decoration! as BoxDecoration).color, AppColors.burntOrange);
+    expect((slip.decoration! as BoxDecoration).color, AppColors.coolGrey);
     expect(
       (slipFreeDay.decoration! as BoxDecoration).color,
       AppColors.successGreen,
     );
+  });
+
+  testWidgets('quit-habit calendar marks slips grey and sober days green', (
+    tester,
+  ) async {
+    final today = DateTime.now();
+    final previousMonth = DateTime(today.year, today.month - 1);
+    final slipDay = DateTime(previousMonth.year, previousMonth.month, 2);
+    final soberDay = DateTime(previousMonth.year, previousMonth.month, 3);
+    final habit = Habit(
+      id: 'quit-soda',
+      name: 'Quit soda',
+      type: HabitType.quit,
+      startDate: today,
+      dailyCounts: {dayKey(slipDay): 1, dayKey(soberDay): 0},
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: _MemoryHabitRepository(),
+          onEdit: () async => null,
+          onTrackDay: (_) async => null,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+
+    Color markerColor(DateTime day) {
+      final cell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
+      final marker = tester
+          .widgetList<Container>(
+            find.descendant(of: cell, matching: find.byType(Container)),
+          )
+          .firstWhere(
+            (container) =>
+                (container.decoration as BoxDecoration?)?.shape ==
+                BoxShape.circle,
+          );
+      return (marker.decoration! as BoxDecoration).color!;
+    }
+
+    expect(markerColor(slipDay), AppColors.coolGrey);
+    expect(markerColor(soberDay), AppColors.successGreen);
+  });
+
+  testWidgets('confirming an earlier quit date updates the start date', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final today = DateUtils.dateOnly(DateTime.now());
+    final earlierDay = today.subtract(const Duration(days: 1));
+    final habit = Habit(
+      id: 'quit-soda',
+      name: 'Quit soda',
+      type: HabitType.quit,
+      startDate: today,
+    );
+    DateTime? savedStartDate;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: _MemoryHabitRepository(),
+          onEdit: () async => null,
+          onTrackDay: (_) async => null,
+          onSetStartDate: (day) async {
+            savedStartDate = day;
+            return habit.copyWith(startDate: day);
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final dayCell = find.byKey(
+      ValueKey('calendar-day-${dayKey(earlierDay)}'),
+    );
+    await tester.scrollUntilVisible(
+      dayCell,
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(dayCell);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Start tracking earlier?'), findsOneWidget);
+    expect(savedStartDate, isNull);
+    await tester.tap(find.textContaining('Start from '));
+    await tester.pumpAndSettle();
+
+    expect(savedStartDate, earlierDay);
+  });
+
+  testWidgets('canceling an earlier quit date leaves it unchanged', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final today = DateUtils.dateOnly(DateTime.now());
+    final earlierDay = today.subtract(const Duration(days: 1));
+    final habit = Habit(
+      id: 'quit-soda',
+      name: 'Quit soda',
+      type: HabitType.quit,
+      startDate: today,
+    );
+    var startDateWasSaved = false;
+    var trackingWasCalled = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: _MemoryHabitRepository(),
+          onEdit: () async => null,
+          onTrackDay: (_) async {
+            trackingWasCalled = true;
+            return null;
+          },
+          onSetStartDate: (_) async {
+            startDateWasSaved = true;
+            return null;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final dayCell = find.byKey(
+      ValueKey('calendar-day-${dayKey(earlierDay)}'),
+    );
+    await tester.scrollUntilVisible(
+      dayCell,
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(dayCell);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(startDateWasSaved, isFalse);
+    expect(trackingWasCalled, isFalse);
   });
 
   testWidgets('add-one tap tracks to the goal, then opens the editor', (

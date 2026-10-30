@@ -36,8 +36,8 @@ class HabitRepository {
             tap_action TEXT NOT NULL DEFAULT 'addOne',
             goal_period TEXT NOT NULL DEFAULT 'none',
             weekly_goal_target INTEGER NOT NULL DEFAULT 1,
-            monthly_goal_target INTEGER NOT NULL DEFAULT 1
-            ,start_date TEXT
+            monthly_goal_target INTEGER NOT NULL DEFAULT 1,
+            start_date TEXT
           )
         ''');
         await database.execute('''
@@ -130,6 +130,11 @@ class HabitRepository {
         }
         if (oldVersion < 5) {
           await database.execute('ALTER TABLE habits ADD COLUMN start_date TEXT');
+          await database.execute('''
+            UPDATE habits
+            SET start_date = date('now', 'localtime')
+            WHERE habit_type = 'quit'
+          ''');
         }
       },
     );
@@ -143,9 +148,11 @@ class HabitRepository {
 
     for (final row in checkInRows) {
       final habitId = row['habit_id'] as String;
-      countsByHabit.putIfAbsent(habitId, () => <String, int>{})[row['day']
-              as String] =
-          (row['count'] as num).toDouble();
+      final counts = countsByHabit.putIfAbsent(
+        habitId,
+        () => <String, num>{},
+      );
+      counts[row['day'] as String] = (row['count'] as num).toDouble();
     }
 
     return habitRows

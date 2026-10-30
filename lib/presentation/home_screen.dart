@@ -56,6 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final habit = Habit(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       name: settings.name,
+      startDate: DateTime.now(),
     ).withSettings(settings);
     await _saveHabits([..._habits, habit]);
   }
@@ -87,6 +88,36 @@ class _HomeScreenState extends State<HomeScreen> {
                     _habits.firstWhere((item) => item.id == habit.id),
                     day,
                   ),
+              onSetStartDate: (day) async {
+                final current = _habits.firstWhere(
+                  (item) => item.id == habit.id,
+                );
+                final updatedHabit = current.copyWith(startDate: day);
+                final updated =
+                    _habits
+                        .map(
+                          (item) =>
+                              item.id == habit.id ? updatedHabit : item,
+                        )
+                        .toList();
+                final saved = await _saveHabits(updated);
+                return saved ? updatedHabit : null;
+              },
+              onSetSlipDay: (day, isSlip) async {
+                final current = _habits.firstWhere(
+                  (item) => item.id == habit.id,
+                );
+                final updatedHabit = current.setCount(day, isSlip ? 1 : 0);
+                final updated =
+                    _habits
+                        .map(
+                          (item) =>
+                              item.id == habit.id ? updatedHabit : item,
+                        )
+                        .toList();
+                final saved = await _saveHabits(updated);
+                return saved ? updatedHabit : null;
+              },
               onEdit:
                   () => _editHabit(
                     _habits.firstWhere((item) => item.id == habit.id),

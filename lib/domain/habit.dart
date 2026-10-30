@@ -79,7 +79,10 @@ class Habit {
       final started = startDate ?? DateTime.now();
       final startedDay = DateTime(started.year, started.month, started.day);
       final checkedDay = DateTime(day.year, day.month, day.day);
-      return !checkedDay.isBefore(startedDay) && count == 0;
+      final explicitlyMarkedSober =
+          dailyCounts.containsKey(dayKey(day)) && count == 0;
+      return explicitlyMarkedSober ||
+          (!checkedDay.isBefore(startedDay) && count == 0);
     }
     if (trackingMode == TrackingMode.yesNo) return count > 0;
     return count >= target;
@@ -106,7 +109,11 @@ class Habit {
     };
     final key = dayKey(day);
     if (count <= 0) {
-      updatedCounts.remove(key);
+      if (type == HabitType.quit) {
+        updatedCounts[key] = 0;
+      } else {
+        updatedCounts.remove(key);
+      }
     } else {
       updatedCounts[key] = count;
     }

@@ -105,6 +105,25 @@ void main() {
       expect(slip.removeCount(today).isCompleteOn(today), isTrue);
     });
 
+    test(
+      'quit habits retain an explicit sober mark before their start date',
+      () {
+        final day = DateTime(2026, 10, 29);
+        final habit = Habit(
+          id: 'soda',
+          name: 'Quit soda',
+          type: HabitType.quit,
+          startDate: DateTime(2026, 10, 30),
+        );
+
+        final sober = habit.setCount(day, 0);
+
+        expect(habit.isCompleteOn(day), isFalse);
+        expect(sober.dailyCounts[dayKey(day)], 0);
+        expect(sober.isCompleteOn(day), isTrue);
+      },
+    );
+
     test('yes/no tracking toggles the selected day', () {
       final today = DateTime(2026, 10, 27);
       final habit = const Habit(

@@ -346,7 +346,7 @@ class _HeatmapDay extends StatelessWidget {
         !inRange
             ? AppColors.carbon
             : slip
-            ? AppColors.burntOrange
+            ? AppColors.coolGrey
             : complete
             ? (habit.type == HabitType.quit ? AppColors.successGreen : color)
             : partial
