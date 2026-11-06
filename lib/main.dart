@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'data/habit_repository.dart';
-import 'presentation/home_screen.dart';
+import 'presentation/app_shell.dart';
+import 'presentation/launch_screen.dart';
 import 'theme/app_colors.dart';
 
 Future<void> main() async {
@@ -41,7 +42,7 @@ class RizeApp extends StatelessWidget {
           contentTextStyle: const TextStyle(color: AppColors.offWhite),
         ),
       ),
-      home: HomeScreen(repository: repository),
+      home: LaunchScreen(child: AppShell(repository: repository)),
     );
   }
 }

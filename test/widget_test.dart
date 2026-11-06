@@ -12,12 +12,14 @@ class _MemoryHabitRepository extends HabitRepository {
   List<Habit> habits = [];
   final Map<String, String> notes = {};
   bool failSavingNotes = false;
+  bool failSavingHabits = false;
 
   @override
   Future<List<Habit>> loadHabits() async => habits;
 
   @override
   Future<void> saveHabits(List<Habit> habits) async {
+    if (failSavingHabits) throw StateError('Unable to save habit');
     this.habits = habits;
   }
 
@@ -37,6 +39,179 @@ class _MemoryHabitRepository extends HabitRepository {
 }
 
 void main() {
+  for (final mode in TrackingMode.values) {
+    testWidgets('existing completed $mode habit loads with its accent card', (
+      tester,
+    ) async {
+      final today = DateTime.now();
+      final accent =
+          [
+            const Color(0xFF448AFF),
+            const Color(0xFF43C77A),
+            const Color(0xFFAB47BC),
+          ][mode.index];
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [
+              Habit(
+                id: 'existing',
+                name: 'Existing habit',
+                colorValue: accent.toARGB32(),
+                trackingMode: mode,
+                target: 5,
+                dailyCounts: {
+                  dayKey(today): mode == TrackingMode.yesNo ? 1 : 5,
+                },
+              ),
+            ];
+      await tester.pumpWidget(
+        MaterialApp(home: HomeScreen(repository: repository)),
+      );
+      await tester.pumpAndSettle();
+      final card = find.byKey(const ValueKey('habit-ignition-existing'));
+      final glow =
+          tester.widget<DecoratedBox>(card).decoration as BoxDecoration;
+      expect(glow.boxShadow!.single.color, accent.withValues(alpha: 0.16));
+      final material = tester.widget<Material>(
+        find.descendant(of: card, matching: find.byType(Material)).first,
+      );
+      expect(
+        material.color,
+        Color.alphaBlend(
+          accent.withValues(alpha: 0.32),
+          AppColors.charcoalGrey,
+        ),
+      );
+      expect(find.byIcon(Icons.local_fire_department_rounded), findsOneWidget);
+      final animation = tester.widget<TweenAnimationBuilder<double>>(
+        find.byType(TweenAnimationBuilder<double>),
+      );
+      expect(
+        animation.tween.begin,
+        1,
+      ); // Loading history must not replay success.
+      expect(
+        repository.habits.single.countOn(today),
+        mode == TrackingMode.yesNo ? 1 : 5,
+      );
+    });
+  }
+
+  for (final scenario in ['complete', 'partial', 'failed', 'quit', 'reduced']) {
+    testWidgets('Today completion animation: $scenario', (tester) async {
+      final repository =
+          _MemoryHabitRepository()
+            ..failSavingHabits = scenario == 'failed'
+            ..habits = [
+              Habit(
+                id: 'habit',
+                name: 'Habit',
+                colorValue: 0xFF448AFF,
+                type: scenario == 'quit' ? HabitType.quit : HabitType.build,
+                trackingMode:
+                    scenario == 'partial'
+                        ? TrackingMode.count
+                        : TrackingMode.yesNo,
+                target: scenario == 'partial' ? 3 : 1,
+              ),
+            ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(disableAnimations: scenario == 'reduced'),
+            child: HomeScreen(repository: repository),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final button = find.byTooltip(
+        scenario == 'quit'
+            ? 'Record a slip'
+            : scenario == 'partial'
+            ? 'Track today'
+            : 'Mark complete',
+      );
+      expect(tester.getSize(button).shortestSide, greaterThanOrEqualTo(48));
+      await tester.tap(button);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      final animation = tester.widget<TweenAnimationBuilder<double>>(
+        find.byType(TweenAnimationBuilder<double>),
+      );
+      expect(animation.tween.begin, scenario == 'complete' ? 0.0 : 1.0);
+      final ignition = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('habit-ignition-habit')),
+      );
+      final glow = (ignition.decoration as BoxDecoration).boxShadow!.single;
+      expect(
+        glow.blurRadius,
+        scenario == 'complete'
+            ? greaterThan(8)
+            : scenario == 'reduced'
+            ? 8
+            : 0,
+      );
+      expect(
+        animation.duration,
+        scenario == 'reduced'
+            ? Duration.zero
+            : const Duration(milliseconds: 1600),
+      );
+      if (scenario == 'failed') {
+        expect(repository.habits.single.countOn(DateTime.now()), 0);
+        expect(find.byTooltip('Mark complete'), findsOneWidget);
+      }
+      if (scenario == 'complete') {
+        double currentGlow() =>
+            (tester
+                        .widget<DecoratedBox>(
+                          find.byKey(const ValueKey('habit-ignition-habit')),
+                        )
+                        .decoration
+                    as BoxDecoration)
+                .boxShadow!
+                .single
+                .blurRadius;
+        await tester.pump(const Duration(milliseconds: 600));
+        final peak = currentGlow();
+        await tester.pump(const Duration(milliseconds: 700));
+        expect(currentGlow(), allOf(greaterThan(8), lessThan(peak)));
+      }
+      await tester.pumpAndSettle();
+      final settled = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('habit-ignition-habit')),
+      );
+      expect(
+        (settled.decoration as BoxDecoration).boxShadow!.single.blurRadius,
+        scenario == 'complete' || scenario == 'reduced' ? 8 : 0,
+      );
+      if (scenario == 'complete' || scenario == 'reduced') {
+        expect(
+          (settled.decoration as BoxDecoration).boxShadow!.single.color,
+          const Color(0xFF448AFF).withValues(alpha: 0.16),
+        );
+      }
+      if (scenario == 'complete') {
+        expect(find.byTooltip('Mark incomplete'), findsOneWidget);
+        expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+        await tester.tap(find.byTooltip('Mark incomplete'));
+        await tester.pumpAndSettle();
+        expect(repository.habits.single.countOn(DateTime.now()), 0);
+        final undone = tester.widget<DecoratedBox>(
+          find.byKey(const ValueKey('habit-ignition-habit')),
+        );
+        expect(
+          (undone.decoration as BoxDecoration).boxShadow!.single.blurRadius,
+          0,
+        );
+        expect(
+          find.byIcon(Icons.local_fire_department_outlined),
+          findsOneWidget,
+        );
+      }
+    });
+  }
+
   testWidgets('heatmap month labels use three-letter abbreviations', (
     tester,
   ) async {
@@ -351,9 +526,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dayCell = find.byKey(
-      ValueKey('calendar-day-${dayKey(earlierDay)}'),
-    );
+    final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(earlierDay)}'));
     await tester.scrollUntilVisible(
       dayCell,
       250,
@@ -407,9 +580,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dayCell = find.byKey(
-      ValueKey('calendar-day-${dayKey(earlierDay)}'),
-    );
+    final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(earlierDay)}'));
     await tester.scrollUntilVisible(
       dayCell,
       250,

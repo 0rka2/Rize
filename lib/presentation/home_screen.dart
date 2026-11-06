@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,18 +12,26 @@ import 'habit_heatmap.dart';
 import 'habit_icons.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({required this.repository, super.key});
+  const HomeScreen({required this.repository, this.onHabitsChanged, super.key});
 
   final HabitRepository repository;
+  final ValueChanged<List<Habit>>? onHabitsChanged;
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class HomeScreenState extends State<HomeScreen> {
   List<Habit> _habits = [];
   bool _isLoading = true;
   bool _hasStorageError = false;
+
+  Future<void> addHabit() => _openAddHabit();
+
+  Future<void> editHabitById(String id) async {
+    final matches = _habits.where((habit) => habit.id == id);
+    if (matches.isNotEmpty) await _editHabit(matches.first);
+  }
 
   @override
   void initState() {
@@ -96,8 +106,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 final updated =
                     _habits
                         .map(
-                          (item) =>
-                              item.id == habit.id ? updatedHabit : item,
+                          (item) => item.id == habit.id ? updatedHabit : item,
                         )
                         .toList();
                 final saved = await _saveHabits(updated);
@@ -111,8 +120,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 final updated =
                     _habits
                         .map(
-                          (item) =>
-                              item.id == habit.id ? updatedHabit : item,
+                          (item) => item.id == habit.id ? updatedHabit : item,
                         )
                         .toList();
                 final saved = await _saveHabits(updated);
@@ -194,6 +202,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _habits = habits;
         _hasStorageError = false;
       });
+      widget.onHabitsChanged?.call(habits);
       return true;
     } catch (_) {
       if (mounted) setState(() => _hasStorageError = true);
@@ -263,6 +272,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: _HabitCard(
+                        key: ValueKey(habit.id),
                         habit: habit,
                         today: DateTime.now(),
                         onOpen: () => _openDetails(habit),
@@ -845,127 +855,429 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   }
 }
 
-class _HabitCard extends StatelessWidget {
+class _HabitCard extends StatefulWidget {
   const _HabitCard({
     required this.habit,
     required this.today,
     required this.onOpen,
     required this.onTrack,
+    super.key,
   });
 
   final Habit habit;
   final DateTime today;
   final VoidCallback onOpen;
-  final VoidCallback onTrack;
+  final Future<Habit?> Function() onTrack;
+
+  @override
+  State<_HabitCard> createState() => _HabitCardState();
+}
+
+class _HabitCardState extends State<_HabitCard> {
+  int _completionAnimation = 0;
+
+  Future<void> _track() async {
+    final wasComplete = widget.habit.isCompleteOn(widget.today);
+    final updated = await widget.onTrack();
+    if (!mounted || updated == null) return;
+    if (!wasComplete &&
+        updated.type == HabitType.build &&
+        updated.isCompleteOn(widget.today) &&
+        !MediaQuery.disableAnimationsOf(context)) {
+      setState(() => _completionAnimation++);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final habit = widget.habit;
+    final today = widget.today;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final color = Color(habit.colorValue);
     final completedToday = habit.isCompleteOn(today);
-    return Material(
-      color: AppColors.charcoalGrey,
-      borderRadius: BorderRadius.circular(22),
-      child: InkWell(
-        onTap: onOpen,
+    return _CardIgnition(
+      color: color,
+      completed: completedToday && habit.type == HabitType.build,
+      animation: _completionAnimation,
+      reduceMotion: reduceMotion,
+      habitId: habit.id,
+      child: Material(
+        color:
+            completedToday && habit.type == HabitType.build
+                ? Color.alphaBlend(
+                  color.withValues(alpha: 0.32),
+                  AppColors.charcoalGrey,
+                )
+                : AppColors.charcoalGrey,
         borderRadius: BorderRadius.circular(22),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: AppColors.coolGrey.withValues(alpha: 0.16),
+        child: InkWell(
+          onTap: widget.onOpen,
+          borderRadius: BorderRadius.circular(22),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color:
+                    completedToday && habit.type == HabitType.build
+                        ? color.withValues(alpha: 0.65)
+                        : AppColors.coolGrey.withValues(alpha: 0.16),
+              ),
             ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(17),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(17),
+                      ),
+                      child: Icon(
+                        habitIcon(habit.icon),
+                        color: color,
+                        size: 25,
+                      ),
                     ),
-                    child: Icon(habitIcon(habit.icon), color: color, size: 27),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          habit.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        if (habit.description.isNotEmpty) ...[
-                          const SizedBox(height: 3),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                           Text(
-                            habit.description,
+                            habit.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: AppColors.coolGrey),
+                            style: Theme.of(
+                              context,
+                            ).textTheme.titleLarge?.copyWith(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
+                          if (habit.description.isNotEmpty) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              habit.description,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(
+                                context,
+                              ).textTheme.bodySmall?.copyWith(
+                                color: AppColors.coolGrey,
+                                fontSize: 12,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 54,
-                    height: 54,
-                    child: IconButton.filled(
-                      tooltip:
-                          habit.type == HabitType.quit
-                              ? completedToday
-                                  ? 'Record a slip'
-                                  : 'Clear today’s slip'
-                              : habit.trackingMode == TrackingMode.yesNo
-                              ? (completedToday
-                                  ? 'Mark incomplete'
-                                  : 'Mark complete')
-                              : 'Track today',
-                      onPressed: onTrack,
-                      style: IconButton.styleFrom(
-                        backgroundColor:
-                            completedToday
-                                ? color
-                                : color.withValues(alpha: 0.2),
-                        foregroundColor:
-                            completedToday ? AppColors.carbon : color,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(17),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: IconButton.filled(
+                        tooltip:
+                            habit.type == HabitType.quit
+                                ? completedToday
+                                    ? 'Record a slip'
+                                    : 'Clear today’s slip'
+                                : habit.trackingMode == TrackingMode.yesNo
+                                ? (completedToday
+                                    ? 'Mark incomplete'
+                                    : 'Mark complete')
+                                : 'Track today',
+                        onPressed: _track,
+                        style: IconButton.styleFrom(
+                          backgroundColor:
+                              completedToday
+                                  ? color
+                                  : color.withValues(alpha: 0.10),
+                          foregroundColor:
+                              completedToday ? AppColors.carbon : color,
+                          minimumSize: const Size(48, 48),
+                          side:
+                              completedToday
+                                  ? BorderSide.none
+                                  : BorderSide(
+                                    color: color.withValues(alpha: 0.55),
+                                  ),
+                          animationDuration: Duration.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(17),
+                          ),
                         ),
-                      ),
-                      icon: Icon(
-                        completedToday
-                            ? Icons.check_rounded
-                            : Icons.check_rounded,
-                        size: 30,
+                        icon:
+                            habit.type == HabitType.quit
+                                ? Icon(
+                                  completedToday
+                                      ? Icons.check_rounded
+                                      : Icons.undo_rounded,
+                                  size: 28,
+                                )
+                                : SizedBox(
+                                  width: 32,
+                                  height: 32,
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      Icon(
+                                        completedToday
+                                            ? Icons
+                                                .local_fire_department_rounded
+                                            : Icons
+                                                .local_fire_department_outlined,
+                                        size: 28,
+                                      ),
+                                      if (completedToday)
+                                        Positioned(
+                                          right: 0,
+                                          bottom: 0,
+                                          child: DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              color: color,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.check_rounded,
+                                              size: 13,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              HabitHeatmap(
-                habit: habit,
-                startDate: DateTime(today.year, today.month, today.day - 179),
-                endDate: today,
-                showMonthLabels: false,
-                showWeekdayLabels: false,
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 12),
+                HabitHeatmap(
+                  habit: habit,
+                  startDate: DateTime(today.year, today.month, today.day - 179),
+                  endDate: today,
+                  showMonthLabels: false,
+                  showWeekdayLabels: false,
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+class _CardIgnition extends StatelessWidget {
+  const _CardIgnition({
+    required this.color,
+    required this.completed,
+    required this.animation,
+    required this.reduceMotion,
+    required this.habitId,
+    required this.child,
+  });
+
+  final Color color;
+  final bool completed;
+  final int animation;
+  final bool reduceMotion;
+  final String habitId;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+    key: ValueKey(animation),
+    tween: Tween(begin: animation == 0 || reduceMotion ? 1 : 0, end: 1),
+    duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 1600),
+    child: child,
+    builder: (context, progress, child) {
+      final ignition = Curves.easeOut.transform(
+        (progress / 0.18).clamp(0.0, 1.0),
+      );
+      final cooling =
+          1 -
+          Curves.easeInOut.transform(
+            ((progress - 0.48) / 0.52).clamp(0.0, 1.0),
+          );
+      final pulse = !completed || reduceMotion ? 0.0 : ignition * cooling;
+      return DecoratedBox(
+        key: ValueKey('habit-ignition-$habitId'),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(
+                alpha: completed ? 0.16 + 0.32 * pulse : 0,
+              ),
+              blurRadius: completed ? 8 + 18 * pulse : 0,
+              spreadRadius: 2 * pulse,
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: Stack(
+            children: [
+              child!,
+              if (pulse > 0)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: RepaintBoundary(
+                      child: CustomPaint(
+                        painter: _RisingFlamesPainter(
+                          color,
+                          progress,
+                          pulse,
+                          habitId.codeUnits.fold<int>(
+                            animation * 31,
+                            (seed, unit) => (seed * 31 + unit) & 0xFFFF,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _RisingFlamesPainter extends CustomPainter {
+  const _RisingFlamesPainter(this.color, this.progress, this.pulse, this.seed);
+
+  final Color color;
+  final double progress;
+  final double pulse;
+  final int seed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final hsl = HSLColor.fromColor(color);
+    // Cool accents get a cyan core; other accents retain their chosen hue.
+    final coreHue = hsl.hue >= 180 && hsl.hue <= 260 ? hsl.hue - 22 : hsl.hue;
+    final core =
+        hsl.withHue(coreHue).withSaturation(0.95).withLightness(0.72).toColor();
+    final rise = Curves.easeOutCubic.transform(
+      (progress / 0.65).clamp(0.0, 1.0),
+    );
+    final base = size.height + 14;
+    final variation = (seed % 997) / 997;
+    // A continuous burn front carries the accent across the entire card.
+    // Its soft edge follows the taller flames instead of stopping at the grid.
+    final front = size.height * (1.15 - rise * 1.4);
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: [
+            color.withValues(alpha: 0.24 * pulse),
+            core.withValues(alpha: 0.17 * pulse),
+            color.withValues(alpha: 0),
+          ],
+          stops: const [0, 0.65, 1],
+        ).createShader(Rect.fromLTRB(0, front, size.width, base)),
+    );
+
+    // Anchor below the card: no moving horizontal edge can cut the fire off.
+    // Rounded curls vary in height, width and phase rather than repeating triangles.
+    for (var i = 0; i < 11; i++) {
+      final phase =
+          i * 2.37 +
+          variation * math.pi * 2 +
+          progress * math.pi * (3 + variation * 2);
+      final x = size.width * (i + 0.4 + 0.14 * math.sin(phase)) / 11;
+      final width = size.width / 8 * (0.8 + 0.2 * math.sin(phase));
+      final height =
+          size.height *
+          (0.32 + 1.45 * rise) *
+          (0.83 + 0.17 * math.sin(i * 1.73 + variation * 5));
+      final curl = width * (0.5 + math.sin(phase) * 0.7);
+      final strandHue =
+          (hsl.hue + 18 * math.sin(i * 1.91 + variation * 6) + 360) % 360;
+      final strand = hsl.withHue(strandHue).withSaturation(0.9).toColor();
+      final strandCore = Color.lerp(strand, core, 0.65)!;
+      final whiteHot = Color.lerp(strandCore, Colors.white, 0.7)!;
+      for (var layer = 0; layer < 3; layer++) {
+        final taper = 1 - layer * 0.28;
+        final w = width * taper;
+        final h = height * (1 - layer * 0.14);
+        final tip = base - h;
+        final flame =
+            Path()
+              ..moveTo(x - w, base)
+              ..cubicTo(
+                x - w * 1.25,
+                base - h * 0.28,
+                x + curl - w,
+                tip + h * 0.52,
+                x + curl * 0.2,
+                tip + h * 0.28,
+              )
+              ..cubicTo(
+                x + curl * 0.65,
+                tip + h * 0.16,
+                x + curl,
+                tip + h * 0.1,
+                x + curl * 0.7,
+                tip,
+              )
+              ..cubicTo(
+                x + curl + w * 0.65,
+                tip + h * 0.24,
+                x - w * 0.2,
+                base - h * 0.35,
+                x + w * 0.65,
+                base - h * 0.22,
+              )
+              ..quadraticBezierTo(x + w * 1.25, base - h * 0.08, x + w, base)
+              ..close();
+        final shade =
+            layer == 0
+                ? strand
+                : layer == 1
+                ? strandCore
+                : whiteHot;
+        final paint =
+            Paint()
+              ..shader = LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [
+                  shade.withValues(alpha: 0),
+                  shade.withValues(alpha: (layer == 0 ? 0.38 : 0.48) * pulse),
+                  shade.withValues(alpha: 0),
+                ],
+                stops: const [0, 0.35, 1],
+              ).createShader(Rect.fromLTRB(0, tip, size.width, base));
+        if (layer == 0) {
+          canvas.drawPath(
+            flame,
+            Paint()
+              ..color = color.withValues(alpha: 0.1 * pulse)
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+          );
+        }
+        canvas.drawPath(flame, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RisingFlamesPainter oldDelegate) =>
+      color != oldDelegate.color ||
+      seed != oldDelegate.seed ||
+      progress != oldDelegate.progress ||
+      pulse != oldDelegate.pulse;
 }
 
 class _EmptyState extends StatelessWidget {
