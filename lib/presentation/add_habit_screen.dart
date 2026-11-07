@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'habit_icons.dart';
+import 'unsaved_changes.dart';
 
 class AddHabitScreen extends StatefulWidget {
   const AddHabitScreen({this.habit, super.key});
@@ -51,6 +52,30 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   late GoalPeriod _goalPeriod;
   late int _weeklyGoalTarget;
   late int _monthlyGoalTarget;
+  late final List<Object> _initialValues;
+
+  List<Object> get _values => [
+    _nameController.text,
+    _descriptionController.text,
+    _targetController.text,
+    _unitController.text,
+    _colorValue,
+    _icon,
+    _type,
+    _trackingMode,
+    _tapAction,
+    _goalPeriod,
+    _weeklyGoalTarget,
+    _monthlyGoalTarget,
+  ];
+
+  bool get _hasUnsavedChanges {
+    final values = _values;
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] != _initialValues[i]) return true;
+    }
+    return false;
+  }
 
   @override
   void initState() {
@@ -75,6 +100,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _goalPeriod = habit?.goalPeriod ?? GoalPeriod.none;
     _weeklyGoalTarget = habit?.weeklyGoalTarget ?? 1;
     _monthlyGoalTarget = habit?.monthlyGoalTarget ?? 1;
+    _initialValues = _values;
   }
 
   @override
@@ -135,14 +161,21 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+    color: Color(_colorValue),
+    hasUnsavedChanges: () => _hasUnsavedChanges,
+    onSave: _save,
+    child: _buildForm(context),
+  );
+
+  Widget _buildForm(BuildContext context) {
     final accent = Color(_colorValue);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.habit == null ? 'New Habit' : 'Edit Habit'),
         leading: IconButton(
           tooltip: 'Close',
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => Navigator.of(context).maybePop(),
           icon: const Icon(Icons.close_rounded),
         ),
         backgroundColor: Colors.transparent,
@@ -416,6 +449,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
       context: context,
       builder:
           (_) => _GoalPeriodDialog(
+            color: Color(_colorValue),
             initialPeriod: _goalPeriod,
             weeklyTarget: _weeklyGoalTarget,
             monthlyTarget: _monthlyGoalTarget,
@@ -503,12 +537,14 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
 
 class _GoalPeriodDialog extends StatefulWidget {
   const _GoalPeriodDialog({
+    required this.color,
     required this.initialPeriod,
     required this.weeklyTarget,
     required this.monthlyTarget,
   });
 
   final GoalPeriod initialPeriod;
+  final Color color;
   final int weeklyTarget;
   final int monthlyTarget;
 
@@ -547,77 +583,88 @@ class _GoalPeriodDialogState extends State<_GoalPeriodDialog> {
     return target != null && target >= 1 && target <= _maximum;
   }
 
+  void _save() {
+    if (!_isValid) return;
+    Navigator.pop(context, (
+      _period,
+      int.tryParse(_weeklyController.text) ?? 1,
+      int.tryParse(_monthlyController.text) ?? 1,
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final hasTarget =
         _period == GoalPeriod.weekly || _period == GoalPeriod.monthly;
-    return AlertDialog(
-      title: const Text('Streak Goal'),
-      scrollable: true,
-      content: RadioGroup<GoalPeriod>(
-        groupValue: _period,
-        onChanged: (value) {
-          if (value != null) setState(() => _period = value);
-        },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final period in GoalPeriod.values)
-              RadioListTile<GoalPeriod>(
-                value: period,
-                contentPadding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                title: Text(switch (period) {
-                  GoalPeriod.none => 'None',
-                  GoalPeriod.daily => 'Daily',
-                  GoalPeriod.weekly => 'Weekly',
-                  GoalPeriod.monthly => 'Monthly',
-                }),
-                subtitle: switch (period) {
-                  GoalPeriod.none => const Text('No period goal'),
-                  GoalPeriod.daily => const Text('Meet the daily habit goal'),
-                  GoalPeriod.weekly => const Text(
-                    '1–7 successful days each week',
-                  ),
-                  GoalPeriod.monthly => const Text(
-                    '1–31 successful days each month',
-                  ),
-                },
-              ),
-            if (hasTarget)
-              TextField(
-                key: const Key('period-goal-value'),
-                controller: _targetController,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText:
-                      _period == GoalPeriod.weekly
-                          ? 'Successful days (1–7)'
-                          : 'Successful days (1–31)',
+    return UnsavedChangesGuard(
+      color: widget.color,
+      hasUnsavedChanges:
+          () =>
+              _period != widget.initialPeriod ||
+              _weeklyController.text != '${widget.weeklyTarget}' ||
+              _monthlyController.text != '${widget.monthlyTarget}',
+      onSave: _save,
+      child: AlertDialog(
+        title: const Text('Streak Goal'),
+        scrollable: true,
+        content: RadioGroup<GoalPeriod>(
+          groupValue: _period,
+          onChanged: (value) {
+            if (value != null) setState(() => _period = value);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final period in GoalPeriod.values)
+                RadioListTile<GoalPeriod>(
+                  value: period,
+                  contentPadding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  title: Text(switch (period) {
+                    GoalPeriod.none => 'None',
+                    GoalPeriod.daily => 'Daily',
+                    GoalPeriod.weekly => 'Weekly',
+                    GoalPeriod.monthly => 'Monthly',
+                  }),
+                  subtitle: switch (period) {
+                    GoalPeriod.none => const Text('No period goal'),
+                    GoalPeriod.daily => const Text('Meet the daily habit goal'),
+                    GoalPeriod.weekly => const Text(
+                      '1–7 successful days each week',
+                    ),
+                    GoalPeriod.monthly => const Text(
+                      '1–31 successful days each month',
+                    ),
+                  },
                 ),
-              ),
-          ],
+              if (hasTarget)
+                TextField(
+                  key: const Key('period-goal-value'),
+                  controller: _targetController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText:
+                        _period == GoalPeriod.weekly
+                            ? 'Successful days (1–7)'
+                            : 'Successful days (1–31)',
+                  ),
+                ),
+            ],
+          ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.maybePop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _isValid ? _save : null,
+            child: const Text('Save'),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed:
-              _isValid
-                  ? () => Navigator.pop(context, (
-                    _period,
-                    int.tryParse(_weeklyController.text) ?? 1,
-                    int.tryParse(_monthlyController.text) ?? 1,
-                  ))
-                  : null,
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 }

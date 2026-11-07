@@ -7,6 +7,7 @@ import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'habit_heatmap.dart';
 import 'habit_icons.dart';
+import 'unsaved_changes.dart';
 
 class HabitDetailScreen extends StatefulWidget {
   const HabitDetailScreen({
@@ -524,6 +525,9 @@ class _NoteEditorState extends State<_NoteEditor> {
     super.dispose();
   }
 
+  bool get _hasUnsavedChanges =>
+      _controller.text.trim() != (_existingNote ?? '');
+
   void _selectDate(DateTime day) {
     setState(() {
       final selectedNote = widget.notes[dayKey(day)];
@@ -570,7 +574,10 @@ class _NoteEditorState extends State<_NoteEditor> {
     setState(() => _saving = true);
     try {
       await widget.onSetSlip(_day, isSlip);
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        setState(() => _saving = false);
+        await Navigator.maybePop(context);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -607,8 +614,11 @@ class _NoteEditorState extends State<_NoteEditor> {
     final color = Color(habit.colorValue);
     final isSlip = habit.countOn(_day) > 0;
     final isSober = habit.isCompleteOn(_day);
-    return PopScope(
-      canPop: !_saving,
+    return UnsavedChangesGuard(
+      color: color,
+      hasUnsavedChanges: () => _hasUnsavedChanges,
+      isSaving: () => _saving,
+      onSave: _save,
       child: Padding(
         padding: EdgeInsets.only(
           bottom: MediaQuery.viewInsetsOf(context).bottom,
@@ -655,7 +665,9 @@ class _NoteEditorState extends State<_NoteEditor> {
                           trailing: IconButton(
                             tooltip: 'Close note editor',
                             onPressed:
-                                _saving ? null : () => Navigator.pop(context),
+                                _saving
+                                    ? null
+                                    : () => Navigator.maybePop(context),
                             icon: const Icon(Icons.close_rounded),
                           ),
                         ),

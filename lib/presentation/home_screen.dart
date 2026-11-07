@@ -8,6 +8,7 @@ import 'add_habit_screen.dart';
 import 'habit_detail_screen.dart';
 import 'habit_heatmap.dart';
 import 'habit_icons.dart';
+import 'unsaved_changes.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({required this.repository, super.key});
@@ -165,7 +166,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       isScrollControlled: true,
       isDismissible: true,
-      enableDrag: true,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder:
           (_) => _DailyTrackingSheet(
@@ -279,8 +280,6 @@ class _HomeScreenState extends State<HomeScreen> {
   );
 }
 
-enum _UnsavedChangesChoice { save, discard, cancel }
-
 class _DailyTrackingSheet extends StatefulWidget {
   const _DailyTrackingSheet({
     required this.habit,
@@ -305,8 +304,6 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   late double _initialCount;
   late String _note;
   bool _isEditingNote = false;
-  bool _allowPop = false;
-  bool _showingExitPrompt = false;
 
   bool get _hasUnsavedChanges =>
       _count != _initialCount || _noteController.text.trim() != _note;
@@ -392,73 +389,11 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   Future<void> _saveTracking() async {
     if (_noteController.text.trim() != _note && !await _saveNote()) return;
     if (mounted) {
-      _allowPop = true;
       Navigator.of(context).pop(_count);
     }
   }
 
-  Future<void> _requestClose() async {
-    if (!_hasUnsavedChanges) {
-      _allowPop = true;
-      if (mounted) Navigator.of(context).pop();
-      return;
-    }
-    await _confirmExit();
-  }
-
-  Future<void> _confirmExit() async {
-    if (_showingExitPrompt || !mounted) return;
-    _showingExitPrompt = true;
-    final choice = await showDialog<_UnsavedChangesChoice>(
-      context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            title: const Text('Save your changes?'),
-            content: const Text('Your changes have not been saved.'),
-            actions: [
-              FilledButton(
-                onPressed:
-                    () => Navigator.pop(
-                      dialogContext,
-                      _UnsavedChangesChoice.save,
-                    ),
-                child: const Text('Save'),
-              ),
-              TextButton(
-                onPressed:
-                    () => Navigator.pop(
-                      dialogContext,
-                      _UnsavedChangesChoice.discard,
-                    ),
-                child: const Text('Discard'),
-              ),
-              TextButton(
-                onPressed:
-                    () => Navigator.pop(
-                      dialogContext,
-                      _UnsavedChangesChoice.cancel,
-                    ),
-                child: const Text('Cancel'),
-              ),
-            ],
-          ),
-    );
-    _showingExitPrompt = false;
-    if (!mounted) return;
-
-    switch (choice) {
-      case _UnsavedChangesChoice.save:
-        await _saveTracking();
-        return;
-      case _UnsavedChangesChoice.discard:
-        _allowPop = true;
-        Navigator.of(context).pop();
-        return;
-      case _UnsavedChangesChoice.cancel:
-      case null:
-        break;
-    }
-  }
+  Future<void> _requestClose() => Navigator.of(context).maybePop();
 
   @override
   Widget build(BuildContext context) {
@@ -467,11 +402,10 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
     final percent = (_progress * 100).round();
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
-    return PopScope<double>(
-      canPop: !_hasUnsavedChanges || _allowPop,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _hasUnsavedChanges) _confirmExit();
-      },
+    return UnsavedChangesGuard(
+      color: accent,
+      hasUnsavedChanges: () => _hasUnsavedChanges,
+      onSave: _saveTracking,
       child: SafeArea(
         top: false,
         child: Padding(
@@ -491,12 +425,25 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 48,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: AppColors.coolGrey.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(4),
+                  GestureDetector(
+                    key: const Key('tracking-drag-handle'),
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragEnd: (details) {
+                      if ((details.primaryVelocity ?? 0) > 200) _requestClose();
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 10,
+                      ),
+                      child: Container(
+                        width: 48,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: AppColors.coolGrey.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 18),

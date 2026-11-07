@@ -37,6 +37,99 @@ class _MemoryHabitRepository extends HabitRepository {
 }
 
 void main() {
+  testWidgets('habit form protects edits on close and system back', (
+    tester,
+  ) async {
+    final repository = _MemoryHabitRepository();
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add your first habit'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('habit-name')), 'Read');
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.text('Save your changes?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.name, 'Read');
+
+    await tester.tap(find.text('Read'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Edit habit'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('habit-description')),
+      'New description',
+    );
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Discard'));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.description, isEmpty);
+  });
+
+  testWidgets('unchanged and reverted habit forms close without prompting', (
+    tester,
+  ) async {
+    final repository = _MemoryHabitRepository();
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    for (final changeThenRevert in [false, true]) {
+      await tester.tap(find.text('Add your first habit'));
+      await tester.pumpAndSettle();
+      if (changeThenRevert) {
+        await tester.enterText(find.byKey(const Key('habit-name')), 'Read');
+        await tester.enterText(find.byKey(const Key('habit-name')), '');
+      }
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('Save your changes?'), findsNothing);
+      expect(find.text('Add your first habit'), findsOneWidget);
+    }
+  });
+
+  testWidgets(
+    'habit option edits prompt and invalid saves keep the form open',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(home: HomeScreen(repository: _MemoryHabitRepository())),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add your first habit'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('Quit a habit'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.text('Quit a habit'));
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('Save your changes?'), findsOneWidget);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.text('New Habit'), findsOneWidget);
+      expect(
+        find.text('Enter a name, valid goal, and measurement unit.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Discard'));
+      await tester.pumpAndSettle();
+      expect(find.text('Add your first habit'), findsOneWidget);
+    },
+  );
+
   testWidgets('heatmap month labels use three-letter abbreviations', (
     tester,
   ) async {
@@ -603,7 +696,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'Note for yesterday');
-    await tester.tap(find.text('Save'));
+    await tester.tap(find.byTooltip('Close note editor'));
+    await tester.pumpAndSettle();
+    expect(find.text('Save your changes?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Note for yesterday'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Save'),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(repository.notes[dayKey(day)], 'Note for yesterday');
   });
@@ -637,6 +743,16 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tracking-count')), findsOneWidget);
+
+    await tester.fling(
+      find.byKey(const Key('tracking-drag-handle')),
+      const Offset(0, 180),
+      1000,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Save your changes?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
 
     await tester.tapAt(const Offset(400, 40));
     await tester.pumpAndSettle();
@@ -1069,6 +1185,9 @@ void main() {
     );
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Save your changes?'), findsOneWidget);
+    await tester.tap(find.text('Discard'));
     await tester.pumpAndSettle();
     expect(find.text('31 days / month'), findsOneWidget);
 
