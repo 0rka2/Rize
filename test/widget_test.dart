@@ -620,14 +620,61 @@ void main() {
       expect(find.text('Mo'), findsOneWidget);
       expect(find.byTooltip('Previous month'), findsOneWidget);
 
-      await tester.drag(find.byType(ListView), const Offset(0, -600));
+      final addNote = find.byTooltip('Add note');
+      await tester.scrollUntilVisible(
+        addNote,
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Add note for selected day'));
+      expect(find.text('No notes yet'), findsOneWidget);
+      await tester.tap(addNote);
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField), 'A note for today');
+      final sheet = find.byType(BottomSheet);
+      expect(
+        find.descendant(of: sheet, matching: find.text('Today')),
+        findsOneWidget,
+      );
+      await tester.enterText(find.byType(TextField), 'A note for another day');
+      await tester.tap(find.byTooltip('Choose note date'));
+      await tester.pumpAndSettle();
+      final today = DateTime.now();
+      final noteDay = DateTime(today.year, today.month, today.day - 1);
+      final calendar = tester.widget<CalendarDatePicker>(
+        find.byType(CalendarDatePicker),
+      );
+      expect(calendar.firstDate, DateTime(1900));
+      expect(calendar.lastDate, DateUtils.dateOnly(today));
+      if (noteDay.month != today.month) {
+        await tester.tap(find.byTooltip('Previous month').hitTestable());
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(
+        find.descendant(
+          of: find.byType(CalendarDatePicker),
+          matching: find.text('${noteDay.day}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('A note for another day'), findsOneWidget);
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
-      expect(find.text('A note for today'), findsOneWidget);
+      expect(find.text('A note for another day'), findsOneWidget);
+
+      final notePreview = find.text('A note for another day');
+      await tester.ensureVisible(notePreview);
+      await tester.pumpAndSettle();
+      await tester.tap(notePreview);
+      await tester.pumpAndSettle();
+      expect(sheet, findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        'A note for another day',
+      );
+      await tester.enterText(find.byType(TextField), 'Edited from the preview');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edited from the preview'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Edit habit'));
       await tester.pumpAndSettle();
@@ -639,7 +686,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(repository.habits.single.name, 'Drink more water');
       expect(repository.habits.single.countOn(DateTime.now()), 1);
-      expect(repository.notes.values.single, 'A note for today');
+      expect(repository.notes[dayKey(noteDay)], 'Edited from the preview');
     },
   );
 
@@ -651,8 +698,8 @@ void main() {
         _MemoryHabitRepository()
           ..habits = [const Habit(id: 'read', name: 'Read')]
           ..notes[dayKey(today)] = 'Today note'
-          ..notes[dayKey(today.subtract(const Duration(days: 1)))] =
-              'Yesterday note'
+          ..notes[dayKey(DateTime(today.year, today.month, today.day - 3))] =
+              'Three days ago'
           ..notes[dayKey(today.subtract(const Duration(days: 2)))] =
               'Two days ago'
           ..notes[dayKey(today.subtract(const Duration(days: 5)))] = 'Old note';
@@ -674,12 +721,16 @@ void main() {
     expect(find.text('Two days ago'), findsOneWidget);
     expect(find.text('Old note'), findsNothing);
 
-    await tester.tap(find.text('All notes'));
+    final allNotes = find.text('All notes');
+    await tester.ensureVisible(allNotes);
+    await tester.pumpAndSettle();
+    await tester.tap(allNotes);
     await tester.pumpAndSettle();
     expect(find.text('Old note'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Edit note').first);
+    await tester.tap(find.text('Today note'));
     await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'Updated today');
     repository.failSavingNotes = true;
     await tester.tap(find.text('Save'));
@@ -697,7 +748,13 @@ void main() {
 
     await tester.tap(find.byTooltip('Add note for a date'));
     await tester.pumpAndSettle();
-    final addedDay = today.subtract(const Duration(days: 3));
+    await tester.tap(find.byTooltip('Choose note date'));
+    await tester.pumpAndSettle();
+    final addedDay = DateTime(today.year, today.month, today.day - 4);
+    if (addedDay.month != today.month) {
+      await tester.tap(find.byTooltip('Previous month').hitTestable());
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.text('${addedDay.day}'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'Added on another day');
@@ -705,9 +762,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(repository.notes[dayKey(addedDay)], 'Added on another day');
 
-    await tester.tap(find.byTooltip('Edit note').at(3));
+    await tester.tap(find.text('Added on another day'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete'));
+    await tester.enterText(find.byType(TextField), '   ');
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(repository.notes.containsKey(dayKey(addedDay)), isFalse);
 

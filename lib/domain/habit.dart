@@ -231,6 +231,13 @@ String enumValue(Enum value) => value.name;
 T enumFromName<T extends Enum>(List<T> values, Object? value, T fallback) =>
     values.firstWhere((item) => item.name == value, orElse: () => fallback);
 
+bool canCreateHabitNoteOn(DateTime date) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(date.year, date.month, date.day);
+  return !day.isAfter(today);
+}
+
 String dayKey(DateTime day) {
   final localDay = DateTime(day.year, day.month, day.day);
   final year = localDay.year.toString().padLeft(4, '0');

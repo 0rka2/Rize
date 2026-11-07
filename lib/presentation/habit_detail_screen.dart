@@ -73,6 +73,9 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     await _editNoteForDay(_selectedDay);
   }
 
+  Future<void> _addNote() =>
+      _editNoteForDay(DateTime.now(), allowDateChange: true);
+
   Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
     if (isSlip ? _habit.countOn(day) > 0 : _habit.isCompleteOn(day)) return;
     final updated =
@@ -82,21 +85,24 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     if (updated != null && mounted) setState(() => _habit = updated);
   }
 
-  Future<void> _editNoteForDay(DateTime day) async {
+  Future<void> _editNoteForDay(
+    DateTime day, {
+    bool allowDateChange = false,
+  }) async {
     final key = dayKey(day);
-    final savedNote = await showDialog<String>(
-      context: context,
-      builder:
-          (_) => _NoteEditorDialog(
-            day: day,
-            initialNote: _notes[key] ?? '',
-            repository: widget.repository,
-            habitId: _habit.id,
-          ),
+    if (!_notes.containsKey(key) && !canCreateHabitNoteOn(day)) return;
+    final savedNote = await _showNoteEditor(
+      context,
+      day: day,
+      habit: _habit,
+      notes: _notes,
+      repository: widget.repository,
+      allowDateChange: allowDateChange,
+      onSetSlip: _setSlipForDay,
     );
     if (savedNote == null || !mounted) return;
 
-    _applyNoteChange(key, savedNote);
+    _applyNoteChange(dayKey(savedNote.day), savedNote.content);
   }
 
   void _applyNoteChange(String key, String content) {
@@ -192,6 +198,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   Widget build(BuildContext context) {
     final color = Color(_habit.colorValue);
     final recentNotes = _sortedNotes().take(3).toList();
+    final showEmptyNotes = !_loadingNotes && !_noteError && recentNotes.isEmpty;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final heatmapStart = _heatmapStart(today);
@@ -289,63 +296,41 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Notes',
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                  if (showEmptyNotes)
+                    _EmptyNotes(onAdd: _addNote)
+                  else
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Notes',
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
                         ),
-                      ),
-                      Text(
-                        '${_notes.length}',
-                        key: const Key('notes-count'),
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(color: AppColors.coolGrey),
-                      ),
-                      const SizedBox(width: 10),
-                      TextButton.icon(
-                        onPressed: _openAllNotes,
-                        icon: const Icon(Icons.chevron_right_rounded),
-                        label: const Text('All notes'),
-                        iconAlignment: IconAlignment.end,
-                      ),
-                    ],
-                  ),
+                        Text(
+                          '${_notes.length}',
+                          key: const Key('notes-count'),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(color: AppColors.coolGrey),
+                        ),
+                        const SizedBox(width: 10),
+                        TextButton.icon(
+                          onPressed: _openAllNotes,
+                          icon: const Icon(Icons.chevron_right_rounded),
+                          label: const Text('All notes'),
+                          iconAlignment: IconAlignment.end,
+                        ),
+                      ],
+                    ),
                   if (_loadingNotes)
                     const Center(child: CircularProgressIndicator())
-                  else if (recentNotes.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      child: Text(
-                        'No notes yet',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: AppColors.coolGrey,
-                        ),
-                      ),
-                    )
                   else
                     for (final entry in recentNotes) ...[
                       const SizedBox(height: 10),
                       _NotePreviewCard(
                         entry: entry,
-                        onTap:
-                            () => _showNote(
-                              context,
-                              entry,
-                              isQuit: _habit.type == HabitType.quit,
-                              isSlip:
-                                  _habit.countOn(_dateFromKey(entry.key)) > 0,
-                              isSober: _habit.isCompleteOn(
-                                _dateFromKey(entry.key),
-                              ),
-                              onSetSlip:
-                                  (isSlip) => _setSlipForDay(
-                                    _dateFromKey(entry.key),
-                                    isSlip,
-                                  ),
-                            ),
+                        onTap: () => _editNoteForDay(_dateFromKey(entry.key)),
                       ),
                     ],
                 ],
@@ -365,32 +350,127 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   }
 }
 
-class _NoteEditorDialog extends StatefulWidget {
-  const _NoteEditorDialog({
+class _EmptyNotes extends StatelessWidget {
+  const _EmptyNotes({required this.onAdd});
+
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final accentBackground = AppColors.burntOrange.withValues(alpha: 0.14);
+
+    return Row(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: accentBackground,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Icon(
+            Icons.edit_note_rounded,
+            color: AppColors.burntOrange,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'No notes yet',
+                style: textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'What went well? What got in the way?',
+                style: textTheme.bodyMedium?.copyWith(
+                  color: AppColors.coolGrey,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Add note',
+          onPressed: onAdd,
+          style: IconButton.styleFrom(
+            backgroundColor: accentBackground,
+            foregroundColor: AppColors.burntOrange,
+          ),
+          icon: const Icon(Icons.add_rounded),
+        ),
+      ],
+    );
+  }
+}
+
+typedef _SavedNote = ({DateTime day, String content});
+
+Future<_SavedNote?> _showNoteEditor(
+  BuildContext context, {
+  required DateTime day,
+  required Habit habit,
+  required Map<String, String> notes,
+  required HabitRepository repository,
+  required bool allowDateChange,
+  required Future<void> Function(DateTime, bool) onSetSlip,
+}) => showModalBottomSheet<_SavedNote>(
+  context: context,
+  isScrollControlled: true,
+  useSafeArea: true,
+  enableDrag: false,
+  builder:
+      (_) => _NoteEditor(
+        day: DateUtils.dateOnly(day),
+        habit: habit,
+        notes: notes,
+        repository: repository,
+        allowDateChange: allowDateChange,
+        onSetSlip: onSetSlip,
+      ),
+);
+
+class _NoteEditor extends StatefulWidget {
+  const _NoteEditor({
     required this.day,
-    required this.initialNote,
+    required this.habit,
+    required this.notes,
     required this.repository,
-    required this.habitId,
+    required this.allowDateChange,
+    required this.onSetSlip,
   });
 
   final DateTime day;
-  final String initialNote;
+  final Habit habit;
+  final Map<String, String> notes;
   final HabitRepository repository;
-  final String habitId;
+  final bool allowDateChange;
+  final Future<void> Function(DateTime, bool) onSetSlip;
 
   @override
-  State<_NoteEditorDialog> createState() => _NoteEditorDialogState();
+  State<_NoteEditor> createState() => _NoteEditorState();
 }
 
-class _NoteEditorDialogState extends State<_NoteEditorDialog> {
+class _NoteEditorState extends State<_NoteEditor> {
   late final TextEditingController _controller;
+  late DateTime _day;
+  bool _choosingDate = false;
   bool _saving = false;
   String? _error;
+
+  String? get _existingNote => widget.notes[dayKey(_day)];
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initialNote);
+    _day = widget.day;
+    _controller = TextEditingController(text: _existingNote);
   }
 
   @override
@@ -399,15 +479,38 @@ class _NoteEditorDialogState extends State<_NoteEditorDialog> {
     super.dispose();
   }
 
-  Future<void> _save({bool delete = false}) async {
+  void _selectDate(DateTime day) {
+    setState(() {
+      final selectedNote = widget.notes[dayKey(day)];
+      if (!DateUtils.isSameDay(day, _day) &&
+          (selectedNote != null || _existingNote != null)) {
+        _controller.text = selectedNote ?? '';
+      }
+      _day = day;
+      _choosingDate = false;
+      _error = null;
+    });
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    if (_existingNote == null && !canCreateHabitNoteOn(_day)) {
+      setState(() => _error = 'New notes cannot be added for future dates.');
+      return;
+    }
+    final content = _controller.text.trim();
+    if (_existingNote == null && content.isEmpty) {
+      setState(() => _error = 'Write a note before saving.');
+      return;
+    }
+
     setState(() {
       _saving = true;
       _error = null;
     });
-    final content = delete ? '' : _controller.text.trim();
     try {
-      await widget.repository.saveNote(widget.habitId, widget.day, content);
-      if (mounted) Navigator.pop(context, content);
+      await widget.repository.saveNote(widget.habit.id, _day, content);
+      if (mounted) Navigator.pop(context, (day: _day, content: content));
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -417,49 +520,153 @@ class _NoteEditorDialogState extends State<_NoteEditorDialog> {
     }
   }
 
+  Future<void> _setSlip(bool isSlip) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.onSetSlip(_day, isSlip);
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(MaterialLocalizations.of(context).formatMediumDate(widget.day)),
-    content: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        TextField(
-          controller: _controller,
-          autofocus: true,
-          minLines: 3,
-          maxLines: 6,
-          maxLength: 500,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            hintText: 'What went well? What got in the way?',
+  Widget build(BuildContext context) {
+    final habit = widget.habit;
+    final dateLabel = MaterialLocalizations.of(context).formatMediumDate(_day);
+    final field = TextField(
+      controller: _controller,
+      readOnly: _saving,
+      minLines: 3,
+      maxLines: 6,
+      maxLength: 500,
+      textCapitalization: TextCapitalization.sentences,
+      decoration: const InputDecoration(
+        hintText: 'What went well? What got in the way?',
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+        ),
+      ),
+    );
+    final saveButton = FilledButton(
+      onPressed: _saving ? null : _save,
+      child: Text(_saving ? 'Saving…' : 'Save'),
+    );
+    final error = _error;
+    final errorText =
+        error == null
+            ? null
+            : Text(error, style: const TextStyle(color: AppColors.burntOrange));
+
+    final color = Color(habit.colorValue);
+    final isSlip = habit.countOn(_day) > 0;
+    final isSober = habit.isCompleteOn(_day);
+    return PopScope(
+      canPop: !_saving,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child:
+                _choosingDate
+                    ? Column(
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: IconButton(
+                            tooltip: 'Back to note',
+                            onPressed:
+                                () => setState(() => _choosingDate = false),
+                            icon: const Icon(Icons.arrow_back_rounded),
+                          ),
+                        ),
+                        _NoteCalendar(
+                          initialDate: _day,
+                          onDateChanged: _selectDate,
+                        ),
+                      ],
+                    )
+                    : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: CircleAvatar(
+                            backgroundColor: color.withValues(alpha: 0.14),
+                            foregroundColor: color,
+                            child: Icon(habitIcon(habit.icon)),
+                          ),
+                          title: Text(habit.name),
+                          subtitle: Text(
+                            DateUtils.isSameDay(_day, DateTime.now())
+                                ? 'Today'
+                                : dateLabel,
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Close note editor',
+                            onPressed:
+                                _saving ? null : () => Navigator.pop(context),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        field,
+                        if (errorText != null) errorText,
+                        Row(
+                          children: [
+                            if (widget.allowDateChange) ...[
+                              IconButton.filledTonal(
+                                tooltip: 'Choose note date',
+                                onPressed:
+                                    _saving
+                                        ? null
+                                        : () {
+                                          FocusScope.of(context).unfocus();
+                                          setState(() => _choosingDate = true);
+                                        },
+                                icon: const Icon(Icons.calendar_today_rounded),
+                              ),
+                              const SizedBox(width: 12),
+                            ],
+                            Expanded(child: saveButton),
+                          ],
+                        ),
+                        if (habit.type == HabitType.quit &&
+                            _existingNote != null)
+                          Wrap(
+                            children: [
+                              TextButton(
+                                onPressed:
+                                    _saving || isSlip
+                                        ? null
+                                        : () => _setSlip(true),
+                                child: Text(
+                                  isSlip ? 'Marked as slip' : 'Mark as slip',
+                                ),
+                              ),
+                              TextButton(
+                                onPressed:
+                                    _saving || isSober
+                                        ? null
+                                        : () => _setSlip(false),
+                                child: Text(
+                                  isSober ? 'Marked as sober' : 'Mark as sober',
+                                ),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
           ),
         ),
-        if (_error != null)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              _error!,
-              style: const TextStyle(color: AppColors.burntOrange),
-            ),
-          ),
-      ],
-    ),
-    actions: [
-      TextButton(
-        onPressed: _saving ? null : () => Navigator.pop(context),
-        child: const Text('Cancel'),
       ),
-      if (widget.initialNote.isNotEmpty)
-        TextButton(
-          onPressed: _saving ? null : () => _save(delete: true),
-          child: const Text('Delete'),
-        ),
-      FilledButton(
-        onPressed: _saving ? null : _save,
-        child: Text(_saving ? 'Saving…' : 'Save'),
-      ),
-    ],
-  );
+    );
+  }
 }
 
 class HabitNotesScreen extends StatefulWidget {
@@ -521,20 +728,20 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
     return entries;
   }
 
-  Future<void> _editNote(DateTime day) async {
-    final key = dayKey(day);
-    final content = await showDialog<String>(
-      context: context,
-      builder:
-          (_) => _NoteEditorDialog(
-            day: day,
-            initialNote: _notes[key] ?? '',
-            repository: widget.repository,
-            habitId: widget.habit.id,
-          ),
+  Future<void> _editNote(DateTime day, {bool allowDateChange = false}) async {
+    final savedNote = await _showNoteEditor(
+      context,
+      day: day,
+      habit: _habit,
+      notes: _notes,
+      repository: widget.repository,
+      allowDateChange: allowDateChange,
+      onSetSlip: _setSlipForDay,
     );
-    if (content == null || !mounted) return;
+    if (savedNote == null || !mounted) return;
 
+    final key = dayKey(savedNote.day);
+    final content = savedNote.content;
     final updated = Map<String, String>.of(_notes);
     if (content.isEmpty) {
       updated.remove(key);
@@ -545,13 +752,7 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
     widget.onNotesChanged(Map.of(updated));
   }
 
-  Future<void> _addNote() async {
-    final day = await showDialog<DateTime>(
-      context: context,
-      builder: (_) => _NoteDatePickerDialog(),
-    );
-    if (day != null && mounted) await _editNote(day);
-  }
+  Future<void> _addNote() => _editNote(DateTime.now(), allowDateChange: true);
 
   Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
     if (isSlip ? _habit.countOn(day) > 0 : _habit.isCompleteOn(day)) return;
@@ -621,23 +822,6 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
                         entry: entry,
                         dateLabel: _dateLabel(entry.key),
                         onEdit: () => _editNote(_dateFromKey(entry.key)),
-                        onTap:
-                            () => _showNote(
-                              context,
-                              entry,
-                              onEdit: () => _editNote(_dateFromKey(entry.key)),
-                              isQuit: _habit.type == HabitType.quit,
-                              isSlip:
-                                  _habit.countOn(_dateFromKey(entry.key)) > 0,
-                              isSober: _habit.isCompleteOn(
-                                _dateFromKey(entry.key),
-                              ),
-                              onSetSlip:
-                                  (isSlip) => _setSlipForDay(
-                                    _dateFromKey(entry.key),
-                                    isSlip,
-                                  ),
-                            ),
                       ),
                 ],
               ),
@@ -650,19 +834,17 @@ class _FullNoteCard extends StatelessWidget {
     required this.entry,
     required this.dateLabel,
     required this.onEdit,
-    required this.onTap,
   });
 
   final MapEntry<String, String> entry;
   final String dateLabel;
   final VoidCallback onEdit;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) => Material(
     color: Colors.transparent,
     child: InkWell(
-      onTap: onTap,
+      onTap: onEdit,
       borderRadius: BorderRadius.circular(18),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -758,86 +940,24 @@ class _NotePreviewCard extends StatelessWidget {
   }
 }
 
-Future<void> _showNote(
-  BuildContext context,
-  MapEntry<String, String> entry, {
-  VoidCallback? onEdit,
-  bool isQuit = false,
-  bool isSlip = false,
-  bool isSober = false,
-  Future<void> Function(bool isSlip)? onSetSlip,
-}) async {
-  final parts = entry.key.split('-').map(int.parse).toList();
-  final date = DateTime(parts[0], parts[1], parts[2]);
-  await showDialog<void>(
-    context: context,
-    builder:
-        (context) => AlertDialog(
-          title: Text(MaterialLocalizations.of(context).formatMediumDate(date)),
-          content: SingleChildScrollView(child: SelectableText(entry.value)),
-          actions: [
-            if (isQuit && onSetSlip != null) ...[
-              TextButton(
-                onPressed:
-                    isSlip
-                        ? null
-                        : () async {
-                          await onSetSlip(true);
-                          if (context.mounted) Navigator.pop(context);
-                        },
-                child: Text(isSlip ? 'Marked as slip' : 'Mark as slip'),
-              ),
-              TextButton(
-                onPressed:
-                    isSober
-                        ? null
-                        : () async {
-                          await onSetSlip(false);
-                          if (context.mounted) Navigator.pop(context);
-                        },
-                child: Text(isSober ? 'Marked as sober' : 'Mark as sober'),
-              ),
-            ],
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-            if (onEdit != null)
-              TextButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  onEdit();
-                },
-                icon: const Icon(Icons.edit_outlined),
-                label: const Text('Edit'),
-              ),
-          ],
-        ),
-  );
-}
+class _NoteCalendar extends StatelessWidget {
+  const _NoteCalendar({required this.initialDate, required this.onDateChanged});
 
-class _NoteDatePickerDialog extends StatelessWidget {
-  const _NoteDatePickerDialog();
+  final DateTime initialDate;
+  final ValueChanged<DateTime> onDateChanged;
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Choose a date'),
-    content: SizedBox(
-      width: 340,
-      child: CalendarDatePicker(
-        initialDate: DateTime.now(),
-        firstDate: DateTime(1900),
-        lastDate: DateTime(2100),
-        onDateChanged: (day) => Navigator.pop(context, day),
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-    ],
-  );
+  Widget build(BuildContext context) {
+    final firstDate = DateTime(1900);
+    final today = DateUtils.dateOnly(DateTime.now());
+    final day = DateUtils.dateOnly(initialDate);
+    return CalendarDatePicker(
+      initialDate: day.isBefore(firstDate) || day.isAfter(today) ? today : day,
+      firstDate: firstDate,
+      lastDate: today,
+      onDateChanged: onDateChanged,
+    );
+  }
 }
 
 class _EarlierStartDateDialog extends StatelessWidget {
@@ -1026,7 +1146,10 @@ class _CalendarCard extends StatelessWidget {
               return InkWell(
                 borderRadius: BorderRadius.circular(12),
                 onTap: () => onTrackDay(day),
-                onLongPress: () => onEditNoteForDay(day),
+                onLongPress:
+                    hasNote || canCreateHabitNoteOn(day)
+                        ? () => onEditNoteForDay(day)
+                        : null,
                 child: Container(
                   key: ValueKey('calendar-day-${dayKey(day)}'),
                   decoration: BoxDecoration(
@@ -1117,7 +1240,10 @@ class _CalendarCard extends StatelessWidget {
                     hasSelectedNote
                         ? 'Edit note for selected day'
                         : 'Add note for selected day',
-                onPressed: onEditSelectedNote,
+                onPressed:
+                    hasSelectedNote || canCreateHabitNoteOn(selectedDay)
+                        ? onEditSelectedNote
+                        : null,
                 icon: const Icon(Icons.edit_note_rounded),
               ),
               Expanded(

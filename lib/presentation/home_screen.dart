@@ -359,6 +359,14 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   }
 
   Future<bool> _saveNote() async {
+    if (_note.isEmpty && !canCreateHabitNoteOn(widget.today)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('New notes cannot be added for future dates.'),
+        ),
+      );
+      return false;
+    }
     try {
       await widget.repository.saveNote(
         _habit.id,
@@ -713,7 +721,12 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
                             _isEditingNote
                                 ? 'Editing note'
                                 : (_note.isEmpty ? 'Add note' : 'Edit note'),
-                        onPressed: _isEditingNote ? null : _editNote,
+                        onPressed:
+                            !_isEditingNote &&
+                                    (_note.isNotEmpty ||
+                                        canCreateHabitNoteOn(widget.today))
+                                ? _editNote
+                                : null,
                         icon: Icon(
                           _note.isEmpty
                               ? Icons.edit_note_rounded
