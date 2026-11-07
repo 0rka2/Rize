@@ -302,7 +302,6 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               noteDays: _notes.keys.toSet(),
               startDate: heatmapStart,
               endDate: today,
-              selectedDay: _selectedDay,
               onSelectDay: _selectDay,
             ),
             const SizedBox(height: 12),
@@ -317,6 +316,9 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               visibleMonth: _visibleMonth,
               selectedDay: _selectedDay,
               onChooseMonth: _chooseMonth,
+              onMonthChanged: (month) {
+                setState(() => _visibleMonth = month);
+              },
               onPreviousMonth: () => _changeMonth(-1),
               onNextMonth: () => _changeMonth(1),
               onSelectDay: _selectDay,
@@ -1044,7 +1046,6 @@ class _HeatmapCard extends StatelessWidget {
     required this.noteDays,
     required this.startDate,
     required this.endDate,
-    required this.selectedDay,
     required this.onSelectDay,
   });
 
@@ -1052,7 +1053,6 @@ class _HeatmapCard extends StatelessWidget {
   final Set<String> noteDays;
   final DateTime startDate;
   final DateTime endDate;
-  final DateTime selectedDay;
   final ValueChanged<DateTime> onSelectDay;
 
   @override
@@ -1067,7 +1067,6 @@ class _HeatmapCard extends StatelessWidget {
       habit: habit,
       startDate: startDate,
       endDate: endDate,
-      selectedDay: selectedDay,
       noteDays: noteDays,
       onSelectDay: onSelectDay,
       scrollable: true,
@@ -1075,13 +1074,14 @@ class _HeatmapCard extends StatelessWidget {
   );
 }
 
-class _CalendarCard extends StatelessWidget {
+class _CalendarCard extends StatefulWidget {
   const _CalendarCard({
     required this.habit,
     required this.noteDays,
     required this.visibleMonth,
     required this.selectedDay,
     required this.onChooseMonth,
+    required this.onMonthChanged,
     required this.onPreviousMonth,
     required this.onNextMonth,
     required this.onSelectDay,
@@ -1094,6 +1094,7 @@ class _CalendarCard extends StatelessWidget {
   final DateTime visibleMonth;
   final DateTime selectedDay;
   final VoidCallback onChooseMonth;
+  final ValueChanged<DateTime> onMonthChanged;
   final VoidCallback onPreviousMonth;
   final VoidCallback onNextMonth;
   final ValueChanged<DateTime> onSelectDay;
@@ -1101,10 +1102,43 @@ class _CalendarCard extends StatelessWidget {
   final ValueChanged<DateTime> onEditNoteForDay;
 
   @override
+  State<_CalendarCard> createState() => _CalendarCardState();
+}
+
+class _CalendarCardState extends State<_CalendarCard> {
+  late final PageController _pageController;
+
+  int _pageForMonth(DateTime month) => month.year * 12 + month.month - 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(
+      initialPage: _pageForMonth(widget.visibleMonth),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _CalendarCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_pageForMonth(oldWidget.visibleMonth) !=
+        _pageForMonth(widget.visibleMonth)) {
+      final page = _pageForMonth(widget.visibleMonth);
+      if (_pageController.hasClients && _pageController.page?.round() != page) {
+        _pageController.jumpToPage(page);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final firstDay = DateTime(visibleMonth.year, visibleMonth.month, 1);
-    final today = DateTime.now();
-    final localToday = DateTime(today.year, today.month, today.day);
+    final localToday = DateUtils.dateOnly(DateTime.now());
     const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
@@ -1119,19 +1153,19 @@ class _CalendarCard extends StatelessWidget {
             children: [
               IconButton(
                 tooltip: 'Previous month',
-                onPressed: onPreviousMonth,
+                onPressed: widget.onPreviousMonth,
                 icon: const Icon(Icons.chevron_left_rounded),
               ),
               Expanded(
                 child: Center(
                   child: OutlinedButton.icon(
-                    onPressed: onChooseMonth,
+                    onPressed: widget.onChooseMonth,
                     iconAlignment: IconAlignment.end,
                     icon: const Icon(Icons.expand_more_rounded),
                     label: Text(
                       MaterialLocalizations.of(
                         context,
-                      ).formatMonthYear(visibleMonth),
+                      ).formatMonthYear(widget.visibleMonth),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -1139,7 +1173,7 @@ class _CalendarCard extends StatelessWidget {
               ),
               IconButton(
                 tooltip: 'Next month',
-                onPressed: onNextMonth,
+                onPressed: widget.onNextMonth,
                 icon: const Icon(Icons.chevron_right_rounded),
               ),
             ],
@@ -1160,114 +1194,24 @@ class _CalendarCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: 42,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 7,
-              mainAxisSpacing: 5,
-              crossAxisSpacing: 3,
-            ),
-            itemBuilder: (context, index) {
-              final day = firstDay.add(
-                Duration(days: index - (firstDay.weekday - 1)),
-              );
-              final inMonth = day.month == visibleMonth.month;
-              final isSelected = dayKey(day) == dayKey(selectedDay);
-              final isToday = dayKey(day) == dayKey(localToday);
-              final isFuture = day.isAfter(localToday);
-              final value = habit.countOn(day);
-              final complete = !isFuture && habit.isCompleteOn(day);
-              final slip = habit.type == HabitType.quit && value > 0;
-              final partial =
-                  value > 0 && !complete && habit.type != HabitType.quit;
-              final hasNote = noteDays.contains(dayKey(day));
-              final accent = Color(habit.colorValue);
-              final markColor =
-                  habit.type == HabitType.quit
-                      ? (slip ? AppColors.coolGrey : AppColors.successGreen)
-                      : accent;
-              return InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => onTrackDay(day),
-                onLongPress:
-                    hasNote || canCreateHabitNoteOn(day)
-                        ? () => onEditNoteForDay(day)
-                        : null,
-                child: Container(
-                  key: ValueKey('calendar-day-${dayKey(day)}'),
-                  decoration: BoxDecoration(
-                    color:
-                        isSelected
-                            ? accent.withValues(alpha: 0.18)
-                            : Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color:
-                          isSelected || isToday ? accent : Colors.transparent,
-                    ),
-                  ),
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              '${day.day}',
-                              style: Theme.of(
-                                context,
-                              ).textTheme.bodySmall?.copyWith(
-                                color:
-                                    inMonth
-                                        ? AppColors.offWhite
-                                        : AppColors.coolGrey.withValues(
-                                          alpha: 0.45,
-                                        ),
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            if (inMonth &&
-                                !isFuture &&
-                                (complete || partial || slip || hasNote))
-                              Container(
-                                width: 5,
-                                height: 5,
-                                decoration: BoxDecoration(
-                                  color:
-                                      hasNote && !complete && !partial && !slip
-                                          ? AppColors.offWhite
-                                          : slip
-                                          ? AppColors.coolGrey
-                                          : partial
-                                          ? markColor.withValues(alpha: 0.55)
-                                          : markColor,
-                                  shape: BoxShape.circle,
-                                ),
-                              )
-                            else
-                              const SizedBox(height: 5),
-                          ],
-                        ),
-                      ),
-                      if (inMonth && hasNote)
-                        Positioned(
-                          top: 2,
-                          right: 2,
-                          child: Icon(
-                            Icons.notes_rounded,
-                            size: 12,
-                            color:
-                                isSelected
-                                    ? accent
-                                    : AppColors.offWhite.withValues(
-                                      alpha: 0.75,
-                                    ),
-                          ),
-                        ),
-                    ],
-                  ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Keep all six weeks visible, including the grid spacing.
+              final cellSize = (constraints.maxWidth - 3 * 6) / 7;
+              return SizedBox(
+                height: cellSize * 6 + 5 * 5,
+                child: PageView.builder(
+                  controller: _pageController,
+                  onPageChanged: (page) {
+                    if (page != _pageForMonth(widget.visibleMonth)) {
+                      widget.onMonthChanged(
+                        DateTime(page ~/ 12, page % 12 + 1),
+                      );
+                    }
+                  },
+                  itemBuilder:
+                      (context, page) =>
+                          _buildMonthGrid(DateTime(page ~/ 12, page % 12 + 1)),
                 ),
               );
             },
@@ -1276,13 +1220,121 @@ class _CalendarCard extends StatelessWidget {
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: TextButton.icon(
-              onPressed: () => onSelectDay(localToday),
+              onPressed: () => widget.onSelectDay(localToday),
               icon: const Icon(Icons.today_rounded, size: 18),
               label: const Text('Today'),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMonthGrid(DateTime month) {
+    final firstDay = DateTime(month.year, month.month);
+    final localToday = DateUtils.dateOnly(DateTime.now());
+    return GridView.builder(
+      padding: EdgeInsets.zero,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: 42,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 7,
+        mainAxisSpacing: 5,
+        crossAxisSpacing: 3,
+      ),
+      itemBuilder: (context, index) {
+        final day = firstDay.add(
+          Duration(days: index - (firstDay.weekday - 1)),
+        );
+        final inMonth = day.month == month.month;
+        final isSelected = dayKey(day) == dayKey(widget.selectedDay);
+        final isToday = dayKey(day) == dayKey(localToday);
+        final isFuture = day.isAfter(localToday);
+        final value = widget.habit.countOn(day);
+        final complete = !isFuture && widget.habit.isCompleteOn(day);
+        final slip = widget.habit.type == HabitType.quit && value > 0;
+        final partial =
+            value > 0 && !complete && widget.habit.type != HabitType.quit;
+        final hasNote = widget.noteDays.contains(dayKey(day));
+        final accent = Color(widget.habit.colorValue);
+        final markColor = accent;
+        return InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => widget.onTrackDay(day),
+          onLongPress:
+              hasNote || canCreateHabitNoteOn(day)
+                  ? () => widget.onEditNoteForDay(day)
+                  : null,
+          child: Container(
+            key: ValueKey('calendar-day-${dayKey(day)}'),
+            decoration: BoxDecoration(
+              color:
+                  isSelected
+                      ? accent.withValues(alpha: 0.18)
+                      : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected || isToday ? accent : Colors.transparent,
+              ),
+            ),
+            child: Stack(
+              children: [
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '${day.day}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color:
+                              inMonth
+                                  ? AppColors.offWhite
+                                  : AppColors.coolGrey.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      if (inMonth &&
+                          !isFuture &&
+                          (complete || partial || slip || hasNote))
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color:
+                                hasNote && !complete && !partial && !slip
+                                    ? AppColors.offWhite
+                                    : slip
+                                    ? AppColors.coolGrey
+                                    : partial
+                                    ? markColor.withValues(alpha: 0.55)
+                                    : markColor,
+                            shape: BoxShape.circle,
+                          ),
+                        )
+                      else
+                        const SizedBox(height: 5),
+                    ],
+                  ),
+                ),
+                if (inMonth && hasNote)
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: Icon(
+                      Icons.notes_rounded,
+                      size: 12,
+                      color:
+                          isSelected
+                              ? accent
+                              : AppColors.offWhite.withValues(alpha: 0.75),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

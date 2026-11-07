@@ -49,7 +49,6 @@ void main() {
               habit: const Habit(id: 'read', name: 'Read'),
               startDate: DateTime(2026, 1, 1),
               endDate: DateTime(2026, 3, 31),
-              selectedDay: DateTime(2026, 3, 31),
               noteDays: const {},
               onSelectDay: (_) {},
             ),
@@ -77,7 +76,6 @@ void main() {
               habit: const Habit(id: 'read', name: 'Read'),
               startDate: DateTime(today.year - 2, today.month, today.day),
               endDate: today,
-              selectedDay: today,
               onSelectDay: (day) => selectedDay = day,
               scrollable: true,
             ),
@@ -231,7 +229,9 @@ void main() {
     expect((inactive.decoration! as BoxDecoration).color, AppColors.carbon);
   });
 
-  testWidgets('home heatmaps distinguish quit-habit slip days', (tester) async {
+  testWidgets('quit heatmaps use the habit colour and leave slip days dark', (
+    tester,
+  ) async {
     final today = DateTime.now();
     final slipDay = today.subtract(const Duration(days: 1));
     final repository =
@@ -241,6 +241,7 @@ void main() {
               id: 'quit-soda',
               name: 'Quit soda',
               type: HabitType.quit,
+              colorValue: AppColors.burntOrange.toARGB32(),
               startDate: today,
               dailyCounts: {
                 dayKey(slipDay): 1,
@@ -264,58 +265,142 @@ void main() {
         ),
       ),
     );
-    expect((slip.decoration! as BoxDecoration).color, AppColors.coolGrey);
+    expect((slip.decoration! as BoxDecoration).color, AppColors.carbon);
     expect(
       (slipFreeDay.decoration! as BoxDecoration).color,
-      AppColors.successGreen,
+      AppColors.burntOrange,
     );
   });
 
-  testWidgets('quit-habit calendar marks slips grey and sober days green', (
+  testWidgets(
+    'quit-habit calendar marks slips grey and sober days in the habit colour',
+    (tester) async {
+      final today = DateTime.now();
+      final previousMonth = DateTime(today.year, today.month - 1);
+      final slipDay = DateTime(previousMonth.year, previousMonth.month, 2);
+      final soberDay = DateTime(previousMonth.year, previousMonth.month, 3);
+      final habit = Habit(
+        id: 'quit-soda',
+        name: 'Quit soda',
+        type: HabitType.quit,
+        colorValue: AppColors.burntOrange.toARGB32(),
+        startDate: today,
+        dailyCounts: {dayKey(slipDay): 1, dayKey(soberDay): 0},
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HabitDetailScreen(
+            habit: habit,
+            repository: _MemoryHabitRepository(),
+            onEdit: () async => null,
+            onTrackDay: (_) async => null,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Previous month'));
+      await tester.pumpAndSettle();
+
+      Color markerColor(DateTime day) {
+        final cell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
+        final marker = tester
+            .widgetList<Container>(
+              find.descendant(of: cell, matching: find.byType(Container)),
+            )
+            .firstWhere(
+              (container) =>
+                  (container.decoration as BoxDecoration?)?.shape ==
+                  BoxShape.circle,
+            );
+        return (marker.decoration! as BoxDecoration).color!;
+      }
+
+      expect(markerColor(slipDay), AppColors.coolGrey);
+      expect(markerColor(soberDay), AppColors.burntOrange);
+    },
+  );
+
+  testWidgets('calendar swipes keep the header fixed and navigation in sync', (
     tester,
   ) async {
-    final today = DateTime.now();
-    final previousMonth = DateTime(today.year, today.month - 1);
-    final slipDay = DateTime(previousMonth.year, previousMonth.month, 2);
-    final soberDay = DateTime(previousMonth.year, previousMonth.month, 3);
-    final habit = Habit(
-      id: 'quit-soda',
-      name: 'Quit soda',
-      type: HabitType.quit,
-      startDate: today,
-      dailyCounts: {dayKey(slipDay): 1, dayKey(soberDay): 0},
-    );
+    tester.view.physicalSize = const Size(500, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
+    final today = DateUtils.dateOnly(DateTime.now());
+    final trackedDays = <DateTime>[];
     await tester.pumpWidget(
       MaterialApp(
         home: HabitDetailScreen(
-          habit: habit,
+          habit: Habit(id: 'calendar-swipe', name: 'Read'),
           repository: _MemoryHabitRepository(),
           onEdit: () async => null,
-          onTrackDay: (_) async => null,
+          onTrackDay: (day) async {
+            trackedDays.add(day);
+            return null;
+          },
         ),
       ),
     );
     await tester.pumpAndSettle();
+
+    final pager = find.byType(PageView);
+    await tester.ensureVisible(pager);
+    await tester.pumpAndSettle();
+    final monthButton = find.widgetWithText(
+      OutlinedButton,
+      MaterialLocalizations.of(tester.element(pager)).formatMonthYear(today),
+    );
+    final headerPosition = tester.getTopLeft(monthButton);
+    final weekdaysPosition = tester.getTopLeft(find.text('Mon'));
+    final todayPosition = tester.getTopLeft(find.text('Today'));
+
+    String monthLabel(int offset) => MaterialLocalizations.of(
+      tester.element(pager),
+    ).formatMonthYear(DateTime(today.year, today.month + offset));
+
+    await tester.drag(pager, const Offset(-400, 0));
+    await tester.pumpAndSettle();
+    expect(find.text(monthLabel(1)), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.widgetWithText(OutlinedButton, monthLabel(1))),
+      headerPosition,
+    );
+    expect(tester.getTopLeft(find.text('Mon')), weekdaysPosition);
+    expect(tester.getTopLeft(find.text('Today')), todayPosition);
+    expect(trackedDays, isEmpty);
+
+    await tester.drag(pager, const Offset(400, 0));
+    await tester.pumpAndSettle();
+    expect(find.text(monthLabel(0)), findsOneWidget);
+
     await tester.tap(find.byTooltip('Previous month'));
     await tester.pumpAndSettle();
+    expect(find.text(monthLabel(-1)), findsOneWidget);
+    await tester.drag(pager, const Offset(-400, 0));
+    await tester.pumpAndSettle();
+    expect(find.text(monthLabel(0)), findsOneWidget);
 
-    Color markerColor(DateTime day) {
-      final cell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
-      final marker = tester
-          .widgetList<Container>(
-            find.descendant(of: cell, matching: find.byType(Container)),
-          )
-          .firstWhere(
-            (container) =>
-                (container.decoration as BoxDecoration?)?.shape ==
-                BoxShape.circle,
-          );
-      return (marker.decoration! as BoxDecoration).color!;
-    }
+    await tester.tap(find.byTooltip('Next month'));
+    await tester.pumpAndSettle();
+    expect(find.text(monthLabel(1)), findsOneWidget);
+    await tester.tap(find.text('Today'));
+    await tester.pumpAndSettle();
+    expect(find.text(monthLabel(0)), findsOneWidget);
+    expect(trackedDays, isEmpty);
 
-    expect(markerColor(slipDay), AppColors.coolGrey);
-    expect(markerColor(soberDay), AppColors.successGreen);
+    await tester.tap(find.byKey(ValueKey('calendar-day-${dayKey(today)}')));
+    await tester.pumpAndSettle();
+    expect(trackedDays, [today]);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, monthLabel(0)));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose Date'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text(monthLabel(0)), findsOneWidget);
   });
 
   testWidgets('confirming an earlier quit date updates the start date', (
@@ -351,9 +436,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dayCell = find.byKey(
-      ValueKey('calendar-day-${dayKey(earlierDay)}'),
-    );
+    final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(earlierDay)}'));
     await tester.scrollUntilVisible(
       dayCell,
       250,
@@ -407,9 +490,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dayCell = find.byKey(
-      ValueKey('calendar-day-${dayKey(earlierDay)}'),
-    );
+    final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(earlierDay)}'));
     await tester.scrollUntilVisible(
       dayCell,
       250,

@@ -33,10 +33,10 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     Color(0xFFD970EA),
     Color(0xFFEB66B0),
     Color(0xFFF56D8D),
-    Color(0xFF95A4B8),
-    Color(0xFF9299A4),
-    Color(0xFFAAAAAA),
-    Color(0xFFB1AAA5),
+    Color(0xFFE53935),
+    Color(0xFF3F51E5),
+    Color(0xFF00897B),
+    Color(0xFFFFAB91),
   ];
 
   late final TextEditingController _nameController;

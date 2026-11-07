@@ -10,7 +10,6 @@ class HabitHeatmap extends StatefulWidget {
     required this.endDate,
     this.showMonthLabels = true,
     this.showWeekdayLabels = true,
-    this.selectedDay,
     this.noteDays = const {},
     this.onSelectDay,
     this.scrollable = false,
@@ -22,7 +21,6 @@ class HabitHeatmap extends StatefulWidget {
   final DateTime endDate;
   final bool showMonthLabels;
   final bool showWeekdayLabels;
-  final DateTime? selectedDay;
   final Set<String> noteDays;
   final ValueChanged<DateTime>? onSelectDay;
   final bool scrollable;
@@ -66,7 +64,6 @@ class _HabitHeatmapState extends State<HabitHeatmap> {
     final habit = widget.habit;
     final showMonthLabels = widget.showMonthLabels;
     final showWeekdayLabels = widget.showWeekdayLabels;
-    final selectedDay = widget.selectedDay;
     final noteDays = widget.noteDays;
     final onSelectDay = widget.onSelectDay;
     final start = DateTime(
@@ -161,7 +158,6 @@ class _HabitHeatmapState extends State<HabitHeatmap> {
                       endDate: end,
                       today: today,
                       habit: habit,
-                      selectedDay: selectedDay,
                       hasNote: noteDays.contains(
                         dayKey(
                           DateTime(
@@ -308,7 +304,6 @@ class _HeatmapDay extends StatelessWidget {
     required this.endDate,
     required this.today,
     required this.habit,
-    required this.selectedDay,
     required this.hasNote,
     required this.color,
     required this.size,
@@ -320,7 +315,6 @@ class _HeatmapDay extends StatelessWidget {
   final DateTime endDate;
   final DateTime today;
   final Habit habit;
-  final DateTime? selectedDay;
   final bool hasNote;
   final Color color;
   final double size;
@@ -337,20 +331,13 @@ class _HeatmapDay extends StatelessWidget {
         !isFuture &&
         count > 0 &&
         !complete &&
-        habit.type != HabitType.quit;
-    final slip =
-        inRange && !isFuture && habit.type == HabitType.quit && count > 0;
-    final selected =
-        inRange && selectedDay != null && dayKey(day) == dayKey(selectedDay!);
+        habit.type != HabitType.quit &&
+        habit.target > 0;
     final fill =
-        !inRange
-            ? AppColors.carbon
-            : slip
-            ? AppColors.coolGrey
-            : complete
-            ? (habit.type == HabitType.quit ? AppColors.successGreen : color)
+        complete
+            ? color
             : partial
-            ? color.withValues(alpha: 0.48)
+            ? color.withValues(alpha: count / habit.target)
             : AppColors.carbon;
 
     final cell = Container(
@@ -362,11 +349,9 @@ class _HeatmapDay extends StatelessWidget {
         borderRadius: BorderRadius.circular(size * 0.28),
         border: Border.all(
           color:
-              selected
-                  ? color
-                  : hasNote
+              hasNote
                   ? AppColors.offWhite.withValues(alpha: 0.8)
-                  : (complete || partial || slip)
+                  : complete
                   ? fill
                   : Colors.transparent,
         ),
