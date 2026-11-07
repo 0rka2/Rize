@@ -1,3 +1,5 @@
+import 'package:flutter/cupertino.dart'
+    show CupertinoDatePicker, CupertinoDatePickerMode;
 import 'package:flutter/material.dart';
 
 import '../data/habit_repository.dart';
@@ -67,10 +69,6 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   Future<void> _editHabit() async {
     final updated = await widget.onEdit();
     if (updated != null && mounted) setState(() => _habit = updated);
-  }
-
-  Future<void> _editNote() async {
-    await _editNoteForDay(_selectedDay);
   }
 
   Future<void> _addNote() =>
@@ -159,6 +157,52 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
         _visibleMonth.month + offset,
       );
     });
+  }
+
+  Future<void> _chooseMonth() async {
+    var chosenMonth = _visibleMonth;
+    final month = await showModalBottomSheet<DateTime>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder:
+          (context) => SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Choose Date',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 180,
+                    child: CupertinoDatePicker(
+                      mode: CupertinoDatePickerMode.monthYear,
+                      initialDateTime: _visibleMonth,
+                      onDateTimeChanged: (date) => chosenMonth = date,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, chosenMonth),
+                    child: const Text('Go'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+    );
+    if (!mounted || month == null) return;
+    setState(() => _visibleMonth = month);
   }
 
   void _selectDay(DateTime day) {
@@ -272,7 +316,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               noteDays: _notes.keys.toSet(),
               visibleMonth: _visibleMonth,
               selectedDay: _selectedDay,
-              hasSelectedNote: _notes.containsKey(dayKey(_selectedDay)),
+              onChooseMonth: _chooseMonth,
               onPreviousMonth: () => _changeMonth(-1),
               onNextMonth: () => _changeMonth(1),
               onSelectDay: _selectDay,
@@ -281,7 +325,6 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
                 _selectDay(day);
                 _editNoteForDay(day);
               },
-              onEditSelectedNote: _editNote,
             ),
             const SizedBox(height: 18),
             Container(
@@ -1038,26 +1081,24 @@ class _CalendarCard extends StatelessWidget {
     required this.noteDays,
     required this.visibleMonth,
     required this.selectedDay,
-    required this.hasSelectedNote,
+    required this.onChooseMonth,
     required this.onPreviousMonth,
     required this.onNextMonth,
     required this.onSelectDay,
     required this.onTrackDay,
     required this.onEditNoteForDay,
-    required this.onEditSelectedNote,
   });
 
   final Habit habit;
   final Set<String> noteDays;
   final DateTime visibleMonth;
   final DateTime selectedDay;
-  final bool hasSelectedNote;
+  final VoidCallback onChooseMonth;
   final VoidCallback onPreviousMonth;
   final VoidCallback onNextMonth;
   final ValueChanged<DateTime> onSelectDay;
   final ValueChanged<DateTime> onTrackDay;
   final ValueChanged<DateTime> onEditNoteForDay;
-  final VoidCallback onEditSelectedNote;
 
   @override
   Widget build(BuildContext context) {
@@ -1082,13 +1123,17 @@ class _CalendarCard extends StatelessWidget {
                 icon: const Icon(Icons.chevron_left_rounded),
               ),
               Expanded(
-                child: Text(
-                  MaterialLocalizations.of(
-                    context,
-                  ).formatMonthYear(visibleMonth),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                child: Center(
+                  child: OutlinedButton.icon(
+                    onPressed: onChooseMonth,
+                    iconAlignment: IconAlignment.end,
+                    icon: const Icon(Icons.expand_more_rounded),
+                    label: Text(
+                      MaterialLocalizations.of(
+                        context,
+                      ).formatMonthYear(visibleMonth),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ),
               ),
@@ -1228,36 +1273,13 @@ class _CalendarCard extends StatelessWidget {
             },
           ),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              TextButton.icon(
-                onPressed: () => onSelectDay(localToday),
-                icon: const Icon(Icons.today_rounded, size: 18),
-                label: const Text('Today'),
-              ),
-              IconButton(
-                tooltip:
-                    hasSelectedNote
-                        ? 'Edit note for selected day'
-                        : 'Add note for selected day',
-                onPressed:
-                    hasSelectedNote || canCreateHabitNoteOn(selectedDay)
-                        ? onEditSelectedNote
-                        : null,
-                icon: const Icon(Icons.edit_note_rounded),
-              ),
-              Expanded(
-                child: Text(
-                  _periodProgressLabel(habit, selectedDay),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.end,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelMedium?.copyWith(color: AppColors.coolGrey),
-                ),
-              ),
-            ],
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton.icon(
+              onPressed: () => onSelectDay(localToday),
+              icon: const Icon(Icons.today_rounded, size: 18),
+              label: const Text('Today'),
+            ),
           ),
         ],
       ),
