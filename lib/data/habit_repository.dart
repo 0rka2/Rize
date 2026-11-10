@@ -7,7 +7,16 @@ import '../domain/habit.dart';
 
 class HabitRepository {
   static const _databaseName = 'rize.db';
-  static const _databaseVersion = 5;
+  static const _databaseVersion = 6;
+  static const _repeatDefaults = {
+    'repeat_weekdays': repeatWeekdays,
+    'repeat_gap_days': 5,
+    'repeat_count_weeks': 0,
+    'repeat_count_months': 0,
+    'repeat_fill_weeks': 0,
+    'repeat_fill_months': 0,
+    'repeat_fill_gaps': 0,
+  };
 
   Future<Database>? _database;
 
@@ -22,6 +31,9 @@ class HabitRepository {
         await database.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: (database, version) async {
+        final repeatColumns = _repeatDefaults.entries.map(
+          (entry) => '${entry.key} INTEGER NOT NULL DEFAULT ${entry.value}',
+        );
         await database.execute('''
           CREATE TABLE habits (
             id TEXT PRIMARY KEY,
@@ -37,7 +49,8 @@ class HabitRepository {
             goal_period TEXT NOT NULL DEFAULT 'none',
             weekly_goal_target INTEGER NOT NULL DEFAULT 1,
             monthly_goal_target INTEGER NOT NULL DEFAULT 1,
-            start_date TEXT
+            start_date TEXT,
+            ${repeatColumns.join(', ')}
           )
         ''');
         await database.execute('''
@@ -129,12 +142,21 @@ class HabitRepository {
           );
         }
         if (oldVersion < 5) {
-          await database.execute('ALTER TABLE habits ADD COLUMN start_date TEXT');
+          await database.execute(
+            'ALTER TABLE habits ADD COLUMN start_date TEXT',
+          );
           await database.execute('''
             UPDATE habits
             SET start_date = date('now', 'localtime')
             WHERE habit_type = 'quit'
           ''');
+        }
+        if (oldVersion < 6) {
+          for (final entry in _repeatDefaults.entries) {
+            await database.execute(
+              'ALTER TABLE habits ADD COLUMN ${entry.key} INTEGER NOT NULL DEFAULT ${entry.value}',
+            );
+          }
         }
       },
     );
@@ -148,10 +170,7 @@ class HabitRepository {
 
     for (final row in checkInRows) {
       final habitId = row['habit_id'] as String;
-      final counts = countsByHabit.putIfAbsent(
-        habitId,
-        () => <String, num>{},
-      );
+      final counts = countsByHabit.putIfAbsent(habitId, () => <String, num>{});
       counts[row['day'] as String] = (row['count'] as num).toDouble();
     }
 
@@ -187,6 +206,15 @@ class HabitRepository {
             ),
             weeklyGoalTarget: row['weekly_goal_target'] as int,
             monthlyGoalTarget: row['monthly_goal_target'] as int,
+            buildRepeat: (
+              weekdays: row['repeat_weekdays'] as int,
+              gapDays: row['repeat_gap_days'] as int,
+              countWeeks: row['repeat_count_weeks'] == 1,
+              countMonths: row['repeat_count_months'] == 1,
+              fillWeeks: row['repeat_fill_weeks'] == 1,
+              fillMonths: row['repeat_fill_months'] == 1,
+              fillGaps: row['repeat_fill_gaps'] == 1,
+            ),
             startDate:
                 row['start_date'] == null
                     ? null
@@ -313,6 +341,13 @@ class HabitRepository {
     'goal_period': enumValue(habit.goalPeriod),
     'weekly_goal_target': habit.weeklyGoalTarget,
     'monthly_goal_target': habit.monthlyGoalTarget,
+    'repeat_weekdays': habit.buildRepeat.weekdays,
+    'repeat_gap_days': habit.buildRepeat.gapDays,
+    'repeat_count_weeks': habit.buildRepeat.countWeeks ? 1 : 0,
+    'repeat_count_months': habit.buildRepeat.countMonths ? 1 : 0,
+    'repeat_fill_weeks': habit.buildRepeat.fillWeeks ? 1 : 0,
+    'repeat_fill_months': habit.buildRepeat.fillMonths ? 1 : 0,
+    'repeat_fill_gaps': habit.buildRepeat.fillGaps ? 1 : 0,
     'start_date': habit.startDate == null ? null : dayKey(habit.startDate!),
   };
 }

@@ -4,7 +4,33 @@ enum TrackingMode { yesNo, count, measure }
 
 enum TapAction { addOne, enterTotal }
 
-enum GoalPeriod { none, daily, weekly, monthly }
+enum GoalPeriod { none, daily, weekly, monthly, specificDays, everyFewDays }
+
+enum RepeatMark { free, filled }
+
+typedef BuildRepeatOptions =
+    ({
+      int weekdays,
+      int gapDays,
+      bool countWeeks,
+      bool countMonths,
+      bool fillWeeks,
+      bool fillMonths,
+      bool fillGaps,
+    });
+
+const repeatWeekdays = 0x1f;
+const repeatWeekends = 0x60;
+const repeatAllDays = repeatWeekdays | repeatWeekends;
+const BuildRepeatOptions defaultBuildRepeat = (
+  weekdays: repeatWeekdays,
+  gapDays: 5,
+  countWeeks: false,
+  countMonths: false,
+  fillWeeks: false,
+  fillMonths: false,
+  fillGaps: false,
+);
 
 class HabitSettings {
   const HabitSettings({
@@ -20,6 +46,7 @@ class HabitSettings {
     required this.goalPeriod,
     required this.weeklyGoalTarget,
     required this.monthlyGoalTarget,
+    this.buildRepeat = defaultBuildRepeat,
   });
 
   final String name;
@@ -34,6 +61,7 @@ class HabitSettings {
   final GoalPeriod goalPeriod;
   final int weeklyGoalTarget;
   final int monthlyGoalTarget;
+  final BuildRepeatOptions buildRepeat;
 }
 
 class Habit {
@@ -51,6 +79,7 @@ class Habit {
     this.goalPeriod = GoalPeriod.none,
     this.weeklyGoalTarget = 1,
     this.monthlyGoalTarget = 1,
+    this.buildRepeat = defaultBuildRepeat,
     this.startDate,
     this.dailyCounts = const {},
   });
@@ -68,6 +97,7 @@ class Habit {
   final GoalPeriod goalPeriod;
   final int weeklyGoalTarget;
   final int monthlyGoalTarget;
+  final BuildRepeatOptions buildRepeat;
   final DateTime? startDate;
   final Map<String, num> dailyCounts;
 
@@ -121,38 +151,57 @@ class Habit {
   }
 
   int currentStreak(DateTime today) {
-    var day = DateTime(today.year, today.month, today.day);
+    if (type == HabitType.build) {
+      switch (goalPeriod) {
+        case GoalPeriod.specificDays:
+          return _scheduledStreak(today);
+        case GoalPeriod.everyFewDays:
+          return _rollingStreak(today);
+        case GoalPeriod.weekly:
+        case GoalPeriod.monthly:
+          final streak = quotaStreak(today);
+          return countsPeriods ? streak.periods : streak.days;
+        case GoalPeriod.none:
+        case GoalPeriod.daily:
+          break;
+      }
+    }
+
+    var day = shiftHabitDay(today, 0);
     if (!isCompleteOn(day)) {
-      day = day.subtract(const Duration(days: 1));
+      day = shiftHabitDay(day, -1);
     }
 
     var streak = 0;
     while (isCompleteOn(day)) {
       streak++;
-      day = day.subtract(const Duration(days: 1));
+      day = shiftHabitDay(day, -1);
     }
     return streak;
   }
 
-  int successfulDaysInPeriod(DateTime date, GoalPeriod period) {
+  int successfulDaysInPeriod(
+    DateTime date,
+    GoalPeriod period, {
+    DateTime? today,
+  }) {
     if (period == GoalPeriod.none) return 0;
 
-    final today = DateTime.now();
-    final lastEligibleDay = DateTime(today.year, today.month, today.day);
-    final selectedDay = DateTime(date.year, date.month, date.day);
+    final lastEligibleDay = shiftHabitDay(today ?? DateTime.now(), 0);
+    final selectedDay = shiftHabitDay(date, 0);
     if (selectedDay.isAfter(lastEligibleDay)) return 0;
 
-    if (period == GoalPeriod.daily) {
+    if (period == GoalPeriod.specificDays && !isScheduledOn(selectedDay)) {
+      return 0;
+    }
+    if (period != GoalPeriod.weekly && period != GoalPeriod.monthly) {
       return isCompleteOn(selectedDay) ? 1 : 0;
     }
 
-    final firstDay =
-        period == GoalPeriod.weekly
-            ? selectedDay.subtract(Duration(days: selectedDay.weekday - 1))
-            : DateTime(selectedDay.year, selectedDay.month);
+    final firstDay = _periodStart(selectedDay, period);
     final lastDay =
         period == GoalPeriod.weekly
-            ? firstDay.add(const Duration(days: 6))
+            ? shiftHabitDay(firstDay, 6)
             : DateTime(selectedDay.year, selectedDay.month + 1, 0);
     final endDay = lastDay.isAfter(lastEligibleDay) ? lastEligibleDay : lastDay;
 
@@ -160,7 +209,7 @@ class Habit {
     for (
       var day = firstDay;
       !day.isAfter(endDay);
-      day = day.add(const Duration(days: 1))
+      day = shiftHabitDay(day, 1)
     ) {
       if (isCompleteOn(day)) completedDays++;
     }
@@ -174,7 +223,163 @@ class Habit {
       GoalPeriod.daily => progress >= 1,
       GoalPeriod.weekly => progress >= weeklyGoalTarget,
       GoalPeriod.monthly => progress >= monthlyGoalTarget,
+      GoalPeriod.specificDays || GoalPeriod.everyFewDays => progress >= 1,
     };
+  }
+
+  bool get countsPeriods => switch (goalPeriod) {
+    GoalPeriod.weekly => buildRepeat.countWeeks,
+    GoalPeriod.monthly => buildRepeat.countMonths,
+    _ => false,
+  };
+
+  bool isScheduledOn(DateTime day) =>
+      (buildRepeat.weekdays & (1 << (day.weekday - 1))) != 0;
+
+  ({int days, int periods}) quotaStreak(DateTime today) {
+    final weekly = goalPeriod == GoalPeriod.weekly;
+    if (!weekly && goalPeriod != GoalPeriod.monthly) {
+      return (days: 0, periods: 0);
+    }
+    final target = weekly ? weeklyGoalTarget : monthlyGoalTarget;
+    final totals = _quotaTotals(_completedDates(today));
+    final current = _periodStart(today, goalPeriod);
+    var period = current;
+    var days = 0;
+    var periods = 0;
+    while (true) {
+      final completed = totals[period] ?? 0;
+      if (completed >= target && completed > 0) {
+        days += completed;
+        periods++;
+      } else if (period != current) {
+        break;
+      }
+      period =
+          weekly
+              ? shiftHabitDay(period, -7)
+              : DateTime(period.year, period.month - 1);
+    }
+    return (days: days, periods: periods);
+  }
+
+  DateTime? nextCheckInDue(DateTime today) {
+    final completed = _completedDates(today);
+    return completed.isEmpty
+        ? null
+        : shiftHabitDay(completed.last, buildRepeat.gapDays);
+  }
+
+  Map<String, RepeatMark> repeatMarks(
+    DateTime start,
+    DateTime end, {
+    required DateTime today,
+  }) {
+    if (type != HabitType.build) return const {};
+    final fillQuota = switch (goalPeriod) {
+      GoalPeriod.weekly => buildRepeat.fillWeeks,
+      GoalPeriod.monthly => buildRepeat.fillMonths,
+      _ => false,
+    };
+    final rolling = goalPeriod == GoalPeriod.everyFewDays;
+    final scheduled = goalPeriod == GoalPeriod.specificDays;
+    if (!scheduled && !rolling && !fillQuota) return const {};
+
+    final lastDay = shiftHabitDay(today, 0);
+    final completed = _completedDates(lastDay);
+    final totals =
+        fillQuota ? _quotaTotals(completed) : const <DateTime, int>{};
+    final quota =
+        goalPeriod == GoalPeriod.weekly ? weeklyGoalTarget : monthlyGoalTarget;
+    var activeSince = shiftHabitDay(startDate ?? lastDay, 0);
+    if (completed.isNotEmpty && completed.first.isBefore(activeSince)) {
+      activeSince = completed.first;
+    }
+    final first =
+        start.isAfter(activeSince) ? shiftHabitDay(start, 0) : activeSince;
+    final marks = <String, RepeatMark>{};
+    var next = 0;
+    DateTime? previous;
+    for (
+      var day = first;
+      !day.isAfter(end) && !day.isAfter(lastDay);
+      day = shiftHabitDay(day, 1)
+    ) {
+      while (rolling &&
+          next < completed.length &&
+          !completed[next].isAfter(day)) {
+        previous = completed[next++];
+      }
+      if (countOn(day) > 0 || isCompleteOn(day)) continue;
+      if (scheduled && !isScheduledOn(day)) {
+        marks[dayKey(day)] = RepeatMark.free;
+      } else if (rolling &&
+          previous != null &&
+          day.isBefore(shiftHabitDay(previous, buildRepeat.gapDays))) {
+        marks[dayKey(day)] =
+            buildRepeat.fillGaps ? RepeatMark.filled : RepeatMark.free;
+      } else if (fillQuota &&
+          (totals[_periodStart(day, goalPeriod)] ?? 0) >= quota) {
+        marks[dayKey(day)] = RepeatMark.filled;
+      }
+    }
+    return marks;
+  }
+
+  int _scheduledStreak(DateTime today) {
+    var day = shiftHabitDay(today, 0);
+    if (!isCompleteOn(day)) day = shiftHabitDay(day, -1);
+    var streak = 0;
+    // A validated schedule always contains at least one weekday.
+    if (buildRepeat.weekdays & repeatAllDays == 0) return 0;
+    while (true) {
+      if (isScheduledOn(day)) {
+        if (!isCompleteOn(day)) return streak;
+        streak++;
+      }
+      day = shiftHabitDay(day, -1);
+    }
+  }
+
+  int _rollingStreak(DateTime today) {
+    final completed = _completedDates(today);
+    if (completed.isEmpty ||
+        shiftHabitDay(
+          today,
+          0,
+        ).isAfter(shiftHabitDay(completed.last, buildRepeat.gapDays))) {
+      return 0;
+    }
+    var streak = 1;
+    for (var i = completed.length - 1; i > 0; i--) {
+      if (completed[i].isAfter(
+        shiftHabitDay(completed[i - 1], buildRepeat.gapDays),
+      )) {
+        break;
+      }
+      streak++;
+    }
+    return streak;
+  }
+
+  List<DateTime> _completedDates(DateTime today) {
+    final lastKey = dayKey(today);
+    final dates = <DateTime>[];
+    for (final key in dailyCounts.keys) {
+      if (key.compareTo(lastKey) > 0) continue;
+      final day = DateTime.tryParse(key);
+      if (day != null && isCompleteOn(day)) dates.add(day);
+    }
+    return dates..sort();
+  }
+
+  Map<DateTime, int> _quotaTotals(List<DateTime> completed) {
+    final totals = <DateTime, int>{};
+    for (final day in completed) {
+      final period = _periodStart(day, goalPeriod);
+      totals.update(period, (count) => count + 1, ifAbsent: () => 1);
+    }
+    return totals;
   }
 
   Habit copyWith({
@@ -190,6 +395,7 @@ class Habit {
     GoalPeriod? goalPeriod,
     int? weeklyGoalTarget,
     int? monthlyGoalTarget,
+    BuildRepeatOptions? buildRepeat,
     DateTime? startDate,
     Map<String, num>? dailyCounts,
   }) => Habit(
@@ -206,6 +412,7 @@ class Habit {
     goalPeriod: goalPeriod ?? this.goalPeriod,
     weeklyGoalTarget: weeklyGoalTarget ?? this.weeklyGoalTarget,
     monthlyGoalTarget: monthlyGoalTarget ?? this.monthlyGoalTarget,
+    buildRepeat: buildRepeat ?? this.buildRepeat,
     startDate: startDate ?? this.startDate,
     dailyCounts: dailyCounts ?? this.dailyCounts,
   );
@@ -223,8 +430,17 @@ class Habit {
     goalPeriod: settings.goalPeriod,
     weeklyGoalTarget: settings.weeklyGoalTarget,
     monthlyGoalTarget: settings.monthlyGoalTarget,
+    buildRepeat: settings.buildRepeat,
   );
 }
+
+DateTime shiftHabitDay(DateTime day, int offset) =>
+    DateTime(day.year, day.month, day.day + offset);
+
+DateTime _periodStart(DateTime day, GoalPeriod period) =>
+    period == GoalPeriod.weekly
+        ? shiftHabitDay(day, 1 - day.weekday)
+        : DateTime(day.year, day.month);
 
 String enumValue(Enum value) => value.name;
 

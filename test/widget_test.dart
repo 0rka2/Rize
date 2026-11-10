@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:rize/data/habit_repository.dart';
 import 'package:rize/domain/habit.dart';
+import 'package:rize/main.dart';
 import 'package:rize/presentation/habit_heatmap.dart';
 import 'package:rize/presentation/habit_detail_screen.dart';
 import 'package:rize/presentation/home_screen.dart';
@@ -1115,102 +1116,330 @@ void main() {
     expect(find.byKey(const Key('tracking-save')), findsNothing);
   });
 
-  testWidgets('streak period selection retains weekly and monthly targets', (
+  testWidgets('build habit repeat settings work on a narrow screen', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final repository = _MemoryHabitRepository();
-    await tester.pumpWidget(
-      MaterialApp(home: HomeScreen(repository: repository)),
-    );
+    await tester.pumpWidget(RizeApp(repository: repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Add your first habit'));
-    await tester.pumpAndSettle();
+    Future<void> tap(Finder finder) async {
+      if (finder.hitTestable().evaluate().isEmpty) {
+        if (finder.evaluate().isEmpty) {
+          await tester.scrollUntilVisible(
+            finder,
+            180,
+            scrollable: find.byType(Scrollable).last,
+          );
+        } else {
+          await tester.ensureVisible(finder);
+        }
+        await tester.pump();
+      }
+      expect(finder.hitTestable(), findsOneWidget);
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> openRepeat() async {
+      final selector = find.byKey(const Key('streak-goal-selector'));
+      await tester.scrollUntilVisible(
+        selector,
+        240,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tap(selector);
+    }
+
+    Future<void> pick(String label) async {
+      final option = find.text(label);
+      if (option.evaluate().isEmpty) {
+        await tester.scrollUntilVisible(
+          option,
+          -180,
+          scrollable: find.byType(Scrollable).last,
+        );
+      }
+      await tap(option);
+    }
+
+    Finder stepperButton(String tooltip) => find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == tooltip,
+      description: 'IconButton with tooltip "$tooltip"',
+    );
+
+    final increaseWeek = stepperButton('Increase week target');
+    final decreaseWeek = stepperButton('Decrease week target');
+    final increaseMonth = stepperButton('Increase month target');
+    final decreaseMonth = stepperButton('Decrease month target');
+    const habitColor = Color(0xFF3F51E5);
+    final selectionMark = find.byIcon(Icons.check_circle);
+    final specificDays = find.widgetWithText(ListTile, 'On specific days');
+
+    Future<void> verifySpecificDaysLabel(String label) async {
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: specificDays, matching: find.text(label)),
+        findsOneWidget,
+      );
+    }
+
+    await tap(find.text('Add your first habit'));
     await tester.enterText(find.byKey(const Key('habit-name')), 'Read');
     await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('streak-goal-selector')),
-      300,
-      scrollable: find.byType(Scrollable).first,
+    await tap(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).color == habitColor,
+      ),
     );
-    await tester.drag(find.byType(ListView).first, const Offset(0, -180));
-    await tester.pumpAndSettle();
+    await openRepeat();
+    expect(find.text('Goal & Streak'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'No repeat goal'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('streak-goal-selector')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Weekly').last);
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const Key('period-goal-value')), '8');
-    await tester.pump();
+    await tap(find.text('Every day'));
+    expect(tester.widget<Icon>(selectionMark).color, habitColor);
     expect(
       tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
-          .onPressed,
+          .widget<ListTile>(find.widgetWithText(ListTile, 'Every day'))
+          .selected,
+      isTrue,
+    );
+    await tap(find.text('On specific days'));
+    final monday = stepperButton('Monday');
+    final sunday = stepperButton('Sunday');
+    expect(
+      tester.widget<IconButton>(monday).style?.backgroundColor?.resolve({}),
+      habitColor,
+    );
+    expect(tester.getCenter(monday).dy, tester.getCenter(sunday).dy);
+    expect(tester.getSize(sunday).shortestSide, greaterThanOrEqualTo(44));
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Weekdays'))
+          .selected,
+      isTrue,
+    );
+    await verifySpecificDaysLabel('Mon–Fri');
+    await tap(specificDays);
+    await tap(find.text('Every day'));
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Every day'))
+          .selected,
+      isTrue,
+    );
+    await verifySpecificDaysLabel('Every day');
+    await tap(specificDays);
+    await tap(find.text('Weekends'));
+    await tap(stepperButton('Saturday'));
+    expect(
+      tester.widget<IconButton>(stepperButton('Sunday')).onPressed,
       isNull,
     );
-    await tester.enterText(find.byKey(const Key('period-goal-value')), '5');
-    await tester.pump();
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
+    await tap(monday);
+    await verifySpecificDaysLabel('Mon, Sun');
+    await tap(specificDays);
+    await tap(find.text('Weekends'));
+    await verifySpecificDaysLabel('Sat, Sun');
+    expect(tester.widget<ListTile>(specificDays).selected, isTrue);
+    await tap(find.byTooltip('Back').last);
+    expect(find.text('Sat, Sun'), findsOneWidget);
+    await openRepeat();
 
-    await tester.tap(find.byKey(const Key('streak-goal-selector')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Monthly').last);
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const Key('period-goal-value')), '32');
-    await tester.pump();
-    expect(
-      tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
-          .onPressed,
-      isNull,
-    );
-    await tester.enterText(find.byKey(const Key('period-goal-value')), '31');
-    await tester.pump();
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
+    await tap(find.text('Times a week'));
+    expect(tester.widget<IconButton>(decreaseWeek).onPressed, isNull);
+    for (var target = 1; target < 7; target++) {
+      await tap(increaseWeek);
+    }
+    expect(tester.widget<IconButton>(increaseWeek).onPressed, isNull);
+    await tap(find.text('Weeks'));
+    await tap(find.byType(Switch));
 
-    await tester.tap(find.byKey(const Key('streak-goal-selector')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Weekly').last);
-    await tester.pumpAndSettle();
+    await pick('Times a month');
+    expect(tester.widget<IconButton>(decreaseMonth).onPressed, isNull);
     expect(
-      tester
-          .widget<TextField>(find.byKey(const Key('period-goal-value')))
-          .controller!
-          .text,
-      '5',
+      tester.getSize(increaseMonth).shortestSide,
+      greaterThanOrEqualTo(48),
     );
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(find.text('Save your changes?'), findsOneWidget);
-    await tester.tap(find.text('Discard'));
-    await tester.pumpAndSettle();
+    for (var target = 1; target < 31; target++) {
+      await tap(increaseMonth);
+    }
+    expect(tester.widget<IconButton>(increaseMonth).onPressed, isNull);
+    expect(find.text('31 / month'), findsOneWidget);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+
+    await pick('Every few days');
+    expect(find.text('Every 5 days'), findsOneWidget);
+    final decreaseGap = stepperButton('Decrease interval target');
+    await tap(decreaseGap);
+    await tap(decreaseGap);
+    await tap(decreaseGap);
+    expect(tester.widget<IconButton>(decreaseGap).onPressed, isNull);
+    final increaseGap = stepperButton('Increase interval target');
+    for (var target = 2; target < 31; target++) {
+      await tap(increaseGap);
+    }
+    expect(tester.widget<IconButton>(increaseGap).onPressed, isNull);
+    await tap(find.byType(Switch));
+
+    await pick('Times a week');
+    expect(find.text('7 / week'), findsOneWidget);
+    await tap(decreaseWeek);
+    await pick('Times a month');
+    expect(find.text('31 / month'), findsOneWidget);
+    await tap(find.byTooltip('Back').last);
+    expect(find.text('Save your changes?'), findsNothing);
     expect(find.text('31 days / month'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('streak-goal-selector')));
+    expect(repository.habits, isEmpty);
+    tester.view.physicalSize = const Size(800, 600);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Daily').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(find.text('Daily'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('streak-goal-selector')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('None').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save habit'));
-    await tester.pumpAndSettle();
+    await tap(find.text('Save habit'));
 
     final saved = repository.habits.single;
-    expect(saved.goalPeriod, GoalPeriod.none);
-    expect(saved.weeklyGoalTarget, 5);
+    expect(saved.goalPeriod, GoalPeriod.monthly);
+    expect(saved.weeklyGoalTarget, 6);
     expect(saved.monthlyGoalTarget, 31);
+    expect(saved.buildRepeat.weekdays, repeatWeekends);
+    expect(saved.buildRepeat.gapDays, 31);
+    expect(saved.buildRepeat.countWeeks, isTrue);
+    expect(saved.buildRepeat.countMonths, isFalse);
+    expect(saved.buildRepeat.fillWeeks, isTrue);
+    expect(saved.buildRepeat.fillMonths, isFalse);
+    expect(saved.buildRepeat.fillGaps, isTrue);
+
+    await tap(find.text('Read'));
+    await tap(find.byTooltip('Edit habit'));
+    await openRepeat();
+    expect(find.text('31 / month'), findsOneWidget);
+    await tap(decreaseMonth);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Save your changes?'), findsNothing);
+    expect(find.text('30 days / month'), findsOneWidget);
+
+    await openRepeat();
+    expect(find.text('30 / month'), findsOneWidget);
+    await tap(find.text('No repeat goal'));
+    await tap(find.byTooltip('Back').last);
+    expect(find.text('Save your changes?'), findsNothing);
+    await tap(find.text('Save changes'));
+    expect(repository.habits.single.goalPeriod, GoalPeriod.none);
+    expect(repository.habits.single.monthlyGoalTarget, 30);
+    expect(repository.habits.single.buildRepeat, saved.buildRepeat);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'repeat fill appears in both calendars and allows a real check-in',
+    (tester) async {
+      tester.view.physicalSize = const Size(450, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final today = DateUtils.dateOnly(DateTime.now());
+      final start = shiftHabitDay(today, -2);
+      final habit = Habit(
+        id: 'stretch',
+        name: 'Stretch',
+        trackingMode: TrackingMode.yesNo,
+        goalPeriod: GoalPeriod.everyFewDays,
+        startDate: start,
+        buildRepeat: (
+          weekdays: repeatWeekdays,
+          gapDays: 5,
+          countWeeks: false,
+          countMonths: false,
+          fillWeeks: false,
+          fillMonths: false,
+          fillGaps: true,
+        ),
+        dailyCounts: {dayKey(start): 1},
+      );
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [habit]
+            ..notes[dayKey(today)] = 'A note for the free day';
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      final color = Color(habit.colorValue);
+      final heatmapDay = find.byKey(ValueKey('habit-heatmap-${dayKey(today)}'));
+      BoxDecoration heatmapDecoration() =>
+          tester.widget<Container>(heatmapDay).decoration! as BoxDecoration;
+      expect(heatmapDecoration().color, color.withValues(alpha: 0.18));
+      expect(repository.habits.single.dailyCounts, hasLength(1));
+
+      await tester.tap(find.text('Stretch'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 check-in'), findsOneWidget);
+      expect(heatmapDecoration().color, color.withValues(alpha: 0.18));
+      final calendarDay = find.byKey(ValueKey('calendar-day-${dayKey(today)}'));
+      final children = find.descendant(
+        of: calendarDay,
+        matching: find.byType(Container),
+      );
+      expect(
+        tester.widgetList<Container>(children).map((cell) => cell.decoration),
+        contains(const BoxDecoration(color: AppColors.burntOrange)),
+      );
+      expect(
+        find.descendant(
+          of: calendarDay,
+          matching: find.byIcon(Icons.notes_rounded),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Mark complete'));
+      await tester.pumpAndSettle();
+      expect(heatmapDecoration().color, color);
+      expect(repository.habits.single.dailyCounts, hasLength(2));
+      await tester.tap(find.text('Stretch'));
+      await tester.pumpAndSettle();
+      expect(find.text('2 check-ins'), findsOneWidget);
+    },
+  );
+
+  testWidgets('quit habits still open the streak goal dialog', (tester) async {
+    final repository = _MemoryHabitRepository();
+    await tester.pumpWidget(RizeApp(repository: repository));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add your first habit'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Quit a habit'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Quit a habit'));
+    await tester.pumpAndSettle();
+
+    final selector = find.byKey(const Key('streak-goal-selector'));
+    await tester.scrollUntilVisible(
+      selector,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+
+    final dialog = find.widgetWithText(AlertDialog, 'Streak Goal');
+    expect(dialog, findsOneWidget);
+    expect(find.text('Repeat'), findsNothing);
+    await tester.tap(
+      find.descendant(of: dialog, matching: find.text('Weekly')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('period-goal-value')), findsOneWidget);
   });
 }

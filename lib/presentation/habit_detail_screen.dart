@@ -308,7 +308,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
             const SizedBox(height: 12),
             HabitProgressIndicators(
               streakLabel: _streakLabel(_habit, today),
-              goalLabel: _periodProgressLabel(_habit, today),
+              goalLabel: _periodProgressLabel(context, _habit, today),
             ),
             const SizedBox(height: 18),
             _CalendarCard(
@@ -1245,6 +1245,12 @@ class _CalendarCardState extends State<_CalendarCard> {
   Widget _buildMonthGrid(DateTime month) {
     final firstDay = DateTime(month.year, month.month);
     final localToday = DateUtils.dateOnly(DateTime.now());
+    final gridStart = shiftHabitDay(firstDay, 1 - firstDay.weekday);
+    final repeatMarks = widget.habit.repeatMarks(
+      gridStart,
+      shiftHabitDay(gridStart, 41),
+      today: localToday,
+    );
     return GridView.builder(
       padding: EdgeInsets.zero,
       shrinkWrap: true,
@@ -1256,9 +1262,7 @@ class _CalendarCardState extends State<_CalendarCard> {
         crossAxisSpacing: 3,
       ),
       itemBuilder: (context, index) {
-        final day = firstDay.add(
-          Duration(days: index - (firstDay.weekday - 1)),
-        );
+        final day = shiftHabitDay(gridStart, index);
         final inMonth = day.month == month.month;
         final isSelected = dayKey(day) == dayKey(widget.selectedDay);
         final isToday = dayKey(day) == dayKey(localToday);
@@ -1269,6 +1273,7 @@ class _CalendarCardState extends State<_CalendarCard> {
         final partial =
             value > 0 && !complete && widget.habit.type != HabitType.quit;
         final hasNote = widget.noteDays.contains(dayKey(day));
+        final repeatMark = repeatMarks[dayKey(day)];
         final accent = Color(widget.habit.colorValue);
         final markColor = accent;
         return InkWell(
@@ -1308,20 +1313,33 @@ class _CalendarCardState extends State<_CalendarCard> {
                       const SizedBox(height: 2),
                       if (inMonth &&
                           !isFuture &&
-                          (complete || partial || slip || hasNote))
+                          (complete ||
+                              partial ||
+                              slip ||
+                              hasNote ||
+                              repeatMark != null))
                         Container(
                           width: 5,
                           height: 5,
                           decoration: BoxDecoration(
                             color:
-                                hasNote && !complete && !partial && !slip
+                                hasNote &&
+                                        !complete &&
+                                        !partial &&
+                                        !slip &&
+                                        repeatMark == null
                                     ? AppColors.offWhite
                                     : slip
                                     ? AppColors.coolGrey
                                     : partial
                                     ? markColor.withValues(alpha: 0.55)
+                                    : repeatMark == RepeatMark.free
+                                    ? AppColors.coolGrey
                                     : markColor,
-                            shape: BoxShape.circle,
+                            shape:
+                                repeatMark == RepeatMark.filled
+                                    ? BoxShape.rectangle
+                                    : BoxShape.circle,
                           ),
                         )
                       else
@@ -1351,7 +1369,7 @@ class _CalendarCardState extends State<_CalendarCard> {
   }
 }
 
-String _periodProgressLabel(Habit habit, DateTime day) {
+String _periodProgressLabel(BuildContext context, Habit habit, DateTime day) {
   final progress = habit.successfulDaysInPeriod(day, habit.goalPeriod);
   final reached = habit.periodGoalReached(day);
   return switch (habit.goalPeriod) {
@@ -1368,13 +1386,33 @@ String _periodProgressLabel(Habit habit, DateTime day) {
       '${reached ? 'Goal reached · ' : ''}$progress / ${habit.weeklyGoalTarget} days this week',
     GoalPeriod.monthly =>
       '${reached ? 'Goal reached · ' : ''}$progress / ${habit.monthlyGoalTarget} days this month',
+    GoalPeriod.specificDays =>
+      habit.isCompleteOn(day)
+          ? 'Done today'
+          : habit.isScheduledOn(day)
+          ? 'Scheduled today'
+          : 'Free day',
+    GoalPeriod.everyFewDays => _rollingGoalLabel(context, habit, day),
   };
+}
+
+String _rollingGoalLabel(BuildContext context, Habit habit, DateTime day) {
+  final due = habit.nextCheckInDue(day);
+  if (due == null || !due.isAfter(shiftHabitDay(day, 0))) return 'Check-in due';
+  final date = MaterialLocalizations.of(context).formatMediumDate(due);
+  return 'Next check-in · $date';
 }
 
 String _streakLabel(Habit habit, DateTime today) {
   if (habit.type != HabitType.quit) {
     final streak = habit.currentStreak(today);
-    return '$streak ${streak == 1 ? 'day' : 'days'}';
+    final unit = switch (habit.goalPeriod) {
+      GoalPeriod.everyFewDays => 'check-in',
+      GoalPeriod.weekly when habit.countsPeriods => 'week',
+      GoalPeriod.monthly when habit.countsPeriods => 'month',
+      _ => 'day',
+    };
+    return '$streak $unit${streak == 1 ? '' : 's'}';
   }
 
   final todayKey = dayKey(today);

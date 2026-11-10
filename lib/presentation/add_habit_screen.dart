@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'habit_icons.dart';
+import 'repeat_picker_screen.dart';
 import 'unsaved_changes.dart';
 
 class AddHabitScreen extends StatefulWidget {
@@ -52,6 +53,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   late GoalPeriod _goalPeriod;
   late int _weeklyGoalTarget;
   late int _monthlyGoalTarget;
+  late BuildRepeatOptions _buildRepeat;
   late final List<Object> _initialValues;
 
   List<Object> get _values => [
@@ -67,6 +69,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _goalPeriod,
     _weeklyGoalTarget,
     _monthlyGoalTarget,
+    _buildRepeat,
   ];
 
   bool get _hasUnsavedChanges {
@@ -100,6 +103,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _goalPeriod = habit?.goalPeriod ?? GoalPeriod.none;
     _weeklyGoalTarget = habit?.weeklyGoalTarget ?? 1;
     _monthlyGoalTarget = habit?.monthlyGoalTarget ?? 1;
+    _buildRepeat = habit?.buildRepeat ?? defaultBuildRepeat;
     _initialValues = _values;
   }
 
@@ -147,9 +151,10 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                 ? 'times'
                 : '',
         tapAction: _tapAction,
-        goalPeriod: _goalPeriod,
+        goalPeriod: _effectiveGoalPeriod,
         weeklyGoalTarget: _weeklyGoalTarget,
         monthlyGoalTarget: _monthlyGoalTarget,
+        buildRepeat: _buildRepeat,
       ),
     );
   }
@@ -369,7 +374,9 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _label('Streak Goal'),
+                      _label(
+                        _type == HabitType.build ? 'Repeat' : 'Streak Goal',
+                      ),
                       InkWell(
                         key: const Key('streak-goal-selector'),
                         onTap: _chooseGoalPeriod,
@@ -437,20 +444,65 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
           : 'Log amounts with a unit, such as 2 L of water or 7.5 km.',
   };
 
-  String get _goalPeriodLabel => switch (_goalPeriod) {
-    GoalPeriod.none => 'None',
-    GoalPeriod.daily => 'Daily',
+  GoalPeriod get _effectiveGoalPeriod =>
+      _type == HabitType.quit && !_quitGoalPeriods.contains(_goalPeriod)
+          ? GoalPeriod.none
+          : _goalPeriod;
+
+  String get _goalPeriodLabel => switch (_effectiveGoalPeriod) {
+    GoalPeriod.none => _type == HabitType.build ? 'No repeat goal' : 'None',
+    GoalPeriod.daily => _type == HabitType.build ? 'Every day' : 'Daily',
     GoalPeriod.weekly => '$_weeklyGoalTarget days / week',
     GoalPeriod.monthly => '$_monthlyGoalTarget days / month',
+    GoalPeriod.specificDays => specificDaysLabel(_buildRepeat.weekdays),
+    GoalPeriod.everyFewDays => 'Every ${_buildRepeat.gapDays} days',
   };
 
   Future<void> _chooseGoalPeriod() async {
+    if (_type == HabitType.build) {
+      final habit =
+          widget.habit ?? Habit(id: '', name: '', startDate: DateTime.now());
+      final target = double.tryParse(_targetController.text);
+      final selection = await showModalBottomSheet<RepeatSelection>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        isDismissible: false,
+        enableDrag: false,
+        backgroundColor: Colors.transparent,
+        builder:
+            (_) => RepeatPickerScreen(
+              habit: habit.copyWith(
+                colorValue: _colorValue,
+                type: HabitType.build,
+                trackingMode: _trackingMode,
+                target:
+                    target != null && target.isFinite && target > 0
+                        ? target
+                        : habit.target,
+                goalPeriod: _goalPeriod,
+                weeklyGoalTarget: _weeklyGoalTarget,
+                monthlyGoalTarget: _monthlyGoalTarget,
+                buildRepeat: _buildRepeat,
+              ),
+            ),
+      );
+      if (selection == null || !mounted) return;
+      setState(() {
+        _goalPeriod = selection.period;
+        _weeklyGoalTarget = selection.weeklyTarget;
+        _monthlyGoalTarget = selection.monthlyTarget;
+        _buildRepeat = selection.options;
+      });
+      return;
+    }
+
     final selection = await showDialog<(GoalPeriod, int, int)>(
       context: context,
       builder:
           (_) => _GoalPeriodDialog(
             color: Color(_colorValue),
-            initialPeriod: _goalPeriod,
+            initialPeriod: _effectiveGoalPeriod,
             weeklyTarget: _weeklyGoalTarget,
             monthlyTarget: _monthlyGoalTarget,
           ),
@@ -535,6 +587,13 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   ).textTheme.bodySmall?.copyWith(color: AppColors.coolGrey);
 }
 
+const _quitGoalPeriods = [
+  GoalPeriod.none,
+  GoalPeriod.daily,
+  GoalPeriod.weekly,
+  GoalPeriod.monthly,
+];
+
 class _GoalPeriodDialog extends StatefulWidget {
   const _GoalPeriodDialog({
     required this.color,
@@ -615,19 +674,18 @@ class _GoalPeriodDialogState extends State<_GoalPeriodDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              for (final period in GoalPeriod.values)
+              for (final period in _quitGoalPeriods)
                 RadioListTile<GoalPeriod>(
                   value: period,
                   contentPadding: EdgeInsets.zero,
                   visualDensity: VisualDensity.compact,
                   title: Text(switch (period) {
-                    GoalPeriod.none => 'None',
                     GoalPeriod.daily => 'Daily',
                     GoalPeriod.weekly => 'Weekly',
                     GoalPeriod.monthly => 'Monthly',
+                    _ => 'None',
                   }),
                   subtitle: switch (period) {
-                    GoalPeriod.none => const Text('No period goal'),
                     GoalPeriod.daily => const Text('Meet the daily habit goal'),
                     GoalPeriod.weekly => const Text(
                       '1–7 successful days each week',
@@ -635,6 +693,7 @@ class _GoalPeriodDialogState extends State<_GoalPeriodDialog> {
                     GoalPeriod.monthly => const Text(
                       '1–31 successful days each month',
                     ),
+                    _ => const Text('No period goal'),
                   },
                 ),
               if (hasTarget)

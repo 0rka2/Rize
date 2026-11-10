@@ -93,6 +93,7 @@ class _HabitHeatmapState extends State<HabitHeatmap> {
     const gap = 3.0;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
+    final repeatMarks = habit.repeatMarks(start, end, today: today);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -158,6 +159,7 @@ class _HabitHeatmapState extends State<HabitHeatmap> {
                       endDate: end,
                       today: today,
                       habit: habit,
+                      repeatMarks: repeatMarks,
                       hasNote: noteDays.contains(
                         dayKey(
                           DateTime(
@@ -304,6 +306,7 @@ class _HeatmapDay extends StatelessWidget {
     required this.endDate,
     required this.today,
     required this.habit,
+    required this.repeatMarks,
     required this.hasNote,
     required this.color,
     required this.size,
@@ -315,6 +318,7 @@ class _HeatmapDay extends StatelessWidget {
   final DateTime endDate;
   final DateTime today;
   final Habit habit;
+  final Map<String, RepeatMark> repeatMarks;
   final bool hasNote;
   final Color color;
   final double size;
@@ -333,17 +337,21 @@ class _HeatmapDay extends StatelessWidget {
         !complete &&
         habit.type != HabitType.quit &&
         habit.target > 0;
+    final mark = inRange ? repeatMarks[dayKey(day)] : null;
     final fill =
         complete
             ? color
             : partial
             ? color.withValues(alpha: count / habit.target)
+            : mark == RepeatMark.filled
+            ? color.withValues(alpha: 0.18)
             : AppColors.carbon;
 
     final cell = Container(
       key: inRange ? ValueKey('habit-heatmap-${dayKey(day)}') : null,
       width: size,
       height: size,
+      alignment: Alignment.center,
       decoration: BoxDecoration(
         color: fill,
         borderRadius: BorderRadius.circular(size * 0.28),
@@ -356,6 +364,17 @@ class _HeatmapDay extends StatelessWidget {
                   : Colors.transparent,
         ),
       ),
+      child:
+          mark == null
+              ? null
+              : Container(
+                width: size * (mark == RepeatMark.filled ? 0.42 : 0.24),
+                height: size * (mark == RepeatMark.filled ? 0.42 : 0.24),
+                decoration: BoxDecoration(
+                  color: mark == RepeatMark.filled ? color : AppColors.coolGrey,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
     );
 
     if (!inRange || onSelectDay == null) return cell;
@@ -422,7 +441,9 @@ class _ProgressPill extends StatelessWidget {
       children: [
         Icon(icon, size: 16, color: color),
         const SizedBox(width: 6),
-        Text(label, style: Theme.of(context).textTheme.labelLarge),
+        Flexible(
+          child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+        ),
       ],
     ),
   );

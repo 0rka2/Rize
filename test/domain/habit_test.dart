@@ -198,6 +198,170 @@ void main() {
       );
     });
 
+    test('weekday streak skips free days and gives today time to finish', () {
+      final monday = DateTime(2026, 11, 9);
+      final friday = shiftHabitDay(monday, -3);
+      final saturday = shiftHabitDay(friday, 1);
+      final habit = Habit(
+        id: 'read',
+        name: 'Read',
+        startDate: friday,
+        goalPeriod: GoalPeriod.specificDays,
+        dailyCounts: {dayKey(friday): 1, dayKey(saturday): 1},
+      );
+
+      expect(habit.currentStreak(monday), 1);
+      expect(habit.currentStreak(shiftHabitDay(monday, 1)), 0);
+      expect(habit.setCount(monday, 1).currentStreak(monday), 2);
+      expect(habit.isCompleteOn(saturday), isTrue);
+      expect(habit.repeatMarks(friday, monday, today: monday), {
+        dayKey(shiftHabitDay(friday, 2)): RepeatMark.free,
+      });
+    });
+
+    test('weekly streak counts qualified periods and their completed days', () {
+      final monday = DateTime(2026, 11, 9);
+      final habit = Habit(
+        id: 'read',
+        name: 'Read',
+        goalPeriod: GoalPeriod.weekly,
+        weeklyGoalTarget: 2,
+        dailyCounts: {
+          for (final offset in [-7, -6, -1, 0, 1])
+            dayKey(shiftHabitDay(monday, offset)): 1,
+        },
+      );
+
+      expect(habit.quotaStreak(monday), (days: 3, periods: 1));
+      final tuesday = shiftHabitDay(monday, 1);
+      expect(habit.quotaStreak(tuesday), (days: 5, periods: 2));
+      expect(habit.quotaStreak(shiftHabitDay(monday, 7)), (
+        days: 5,
+        periods: 2,
+      ));
+      expect(habit.quotaStreak(shiftHabitDay(monday, 14)), (
+        days: 0,
+        periods: 0,
+      ));
+      expect(habit.currentStreak(tuesday), 5);
+      expect(
+        habit
+            .copyWith(
+              buildRepeat: (
+                weekdays: repeatWeekdays,
+                gapDays: 5,
+                countWeeks: true,
+                countMonths: false,
+                fillWeeks: false,
+                fillMonths: false,
+                fillGaps: false,
+              ),
+            )
+            .currentStreak(tuesday),
+        2,
+      );
+    });
+
+    test('a short month closes without qualifying for a 31-day goal', () {
+      final habit = Habit(
+        id: 'read',
+        name: 'Read',
+        goalPeriod: GoalPeriod.monthly,
+        monthlyGoalTarget: 31,
+        dailyCounts: {
+          for (var day = 1; day <= 31; day++) dayKey(DateTime(2026, 1, day)): 1,
+          for (var day = 1; day <= 28; day++) dayKey(DateTime(2026, 2, day)): 1,
+        },
+      );
+
+      expect(habit.quotaStreak(DateTime(2026, 2, 28)), (days: 31, periods: 1));
+      expect(habit.quotaStreak(DateTime(2026, 3, 1)), (days: 0, periods: 0));
+    });
+
+    test(
+      'rolling streak uses civil dates through its deadline and restarts',
+      () {
+        final first = DateTime(2026, 9, 25);
+        final due = DateTime(2026, 9, 30);
+        final habit = Habit(
+          id: 'read',
+          name: 'Read',
+          goalPeriod: GoalPeriod.everyFewDays,
+          startDate: first,
+        ).setCount(first, 1);
+        expect(habit.nextCheckInDue(due), due);
+        expect(habit.currentStreak(due), 1);
+        expect(habit.currentStreak(shiftHabitDay(due, 1)), 0);
+        expect(habit.setCount(due, 1).currentStreak(due), 2);
+        final late = shiftHabitDay(due, 1);
+        expect(habit.setCount(late, 1).currentStreak(late), 1);
+        final marks = habit.repeatMarks(first, due, today: due);
+        expect(marks.length, 4);
+        expect(marks.values, everyElement(RepeatMark.free));
+        expect(marks[dayKey(due)], isNull);
+      },
+    );
+
+    test(
+      'fill marks preserve actual check-ins, partial days and future days',
+      () {
+        final monday = DateTime(2026, 11, 9);
+        final tuesday = shiftHabitDay(monday, 1);
+        final wednesday = shiftHabitDay(monday, 2);
+        final thursday = shiftHabitDay(monday, 3);
+        final sunday = shiftHabitDay(monday, 6);
+        final habit = Habit(
+          id: 'read',
+          name: 'Read',
+          target: 2,
+          startDate: monday,
+          goalPeriod: GoalPeriod.weekly,
+          weeklyGoalTarget: 2,
+          buildRepeat: (
+            weekdays: repeatWeekdays,
+            gapDays: 5,
+            countWeeks: false,
+            countMonths: false,
+            fillWeeks: true,
+            fillMonths: true,
+            fillGaps: true,
+          ),
+          dailyCounts: {
+            dayKey(monday): 2,
+            dayKey(tuesday): 1,
+            dayKey(thursday): 2,
+          },
+        );
+
+        expect(habit.repeatMarks(monday, sunday, today: wednesday), isEmpty);
+        expect(habit.repeatMarks(monday, sunday, today: thursday), {
+          dayKey(wednesday): RepeatMark.filled,
+        });
+        expect(
+          habit
+              .copyWith(goalPeriod: GoalPeriod.monthly, monthlyGoalTarget: 2)
+              .repeatMarks(monday, sunday, today: thursday),
+          {dayKey(wednesday): RepeatMark.filled},
+        );
+        expect(
+          habit
+              .copyWith(goalPeriod: GoalPeriod.everyFewDays)
+              .repeatMarks(monday, sunday, today: thursday),
+          {dayKey(wednesday): RepeatMark.filled},
+        );
+        expect(habit.isCompleteOn(wednesday), isFalse);
+        expect(
+          habit.successfulDaysInPeriod(
+            thursday,
+            GoalPeriod.weekly,
+            today: thursday,
+          ),
+          2,
+        );
+        expect(habit.dailyCounts, hasLength(3));
+      },
+    );
+
     test('quit period progress counts slip-free dates only', () {
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
