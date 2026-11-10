@@ -7,7 +7,7 @@ import '../domain/habit.dart';
 
 class HabitRepository {
   static const _databaseName = 'rize.db';
-  static const _databaseVersion = 6;
+  static const _databaseVersion = 7;
   static const _repeatDefaults = {
     'repeat_weekdays': repeatWeekdays,
     'repeat_gap_days': 5,
@@ -50,7 +50,8 @@ class HabitRepository {
             weekly_goal_target INTEGER NOT NULL DEFAULT 1,
             monthly_goal_target INTEGER NOT NULL DEFAULT 1,
             start_date TEXT,
-            ${repeatColumns.join(', ')}
+            ${repeatColumns.join(', ')},
+            quit_limit REAL NOT NULL DEFAULT 0
           )
         ''');
         await database.execute('''
@@ -158,6 +159,11 @@ class HabitRepository {
             );
           }
         }
+        if (oldVersion < 7) {
+          await database.execute(
+            'ALTER TABLE habits ADD COLUMN quit_limit REAL NOT NULL DEFAULT 0',
+          );
+        }
       },
     );
   }
@@ -193,6 +199,7 @@ class HabitRepository {
               TrackingMode.count,
             ),
             target: (row['target'] as num).toDouble(),
+            quitLimit: (row['quit_limit'] as num).toDouble(),
             unit: row['unit'] as String,
             tapAction: enumFromName(
               TapAction.values,
@@ -336,6 +343,7 @@ class HabitRepository {
     'habit_type': enumValue(habit.type),
     'tracking_mode': enumValue(habit.trackingMode),
     'target': habit.target,
+    'quit_limit': habit.quitLimit,
     'unit': habit.unit,
     'tap_action': enumValue(habit.tapAction),
     'goal_period': enumValue(habit.goalPeriod),

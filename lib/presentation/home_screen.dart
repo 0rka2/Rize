@@ -21,6 +21,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Habit> _habits = [];
+  Future<void> _trackingWrites = Future<void>.value();
+  bool _trackingEditorOpen = false;
   bool _isLoading = true;
   bool _hasStorageError = false;
 
@@ -129,62 +131,87 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<Habit?> _trackHabit(Habit habit, [DateTime? selectedDate]) async {
+    if (_trackingEditorOpen) return null;
+
     final now = DateTime.now();
     final today = selectedDate ?? DateTime(now.year, now.month, now.day);
     if (habit.trackingMode == TrackingMode.yesNo) {
-      final updatedHabit = habit.toggleDay(today);
-      final updated =
-          _habits
-              .map((item) => item.id == habit.id ? updatedHabit : item)
-              .toList();
-      final saved = await _saveHabits(updated);
-      return saved ? updatedHabit : null;
+      final result = await _saveTrackingChange(
+        habit.id,
+        (current) => current.toggleDay(today),
+      );
+      return result.habit;
     }
 
-    final canAddOneDirectly =
-        habit.type == HabitType.build &&
-        habit.trackingMode != TrackingMode.yesNo &&
-        habit.tapAction == TapAction.addOne &&
-        !habit.isCompleteOn(today);
-    if (canAddOneDirectly) {
-      final updated =
-          _habits
-              .map((item) => item.id == habit.id ? habit.addCount(today) : item)
-              .toList();
-      final saved = await _saveHabits(updated);
-      return saved ? updated.firstWhere((item) => item.id == habit.id) : null;
+    if (habit.tapAction == TapAction.addOne) {
+      final result = await _saveTrackingChange(habit.id, (current) {
+        return current.countOn(today) < current.dailyTrackingThreshold
+            ? current.addCount(today)
+            : null;
+      });
+      if (!result.openEditor) return result.habit;
     }
 
-    String initialNote = '';
+    return _openTrackingEditor(habit.id, today);
+  }
+
+  Future<Habit?> _openTrackingEditor(String id, DateTime day) async {
+    if (!mounted || _trackingEditorOpen) return null;
+    _trackingEditorOpen = true;
     try {
-      initialNote =
-          (await widget.repository.loadNotes(habit.id))[dayKey(today)] ?? '';
-    } catch (_) {
-      // The tracking sheet remains usable if loading the optional note fails.
-    }
-    final count = await showModalBottomSheet<double>(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: false,
-      backgroundColor: Colors.transparent,
-      builder:
-          (_) => _DailyTrackingSheet(
-            habit: habit,
-            today: today,
-            repository: widget.repository,
-            initialNote: initialNote,
-          ),
-    );
-    if (count == null || !mounted) return null;
+      String initialNote = '';
+      try {
+        initialNote =
+            (await widget.repository.loadNotes(id))[dayKey(day)] ?? '';
+      } catch (_) {
+        // The tracking sheet remains usable if loading the optional note fails.
+      }
+      await _trackingWrites;
+      if (!mounted) return null;
 
-    final updatedHabit = habit.setCount(today, count);
-    final updated =
-        _habits
-            .map((item) => item.id == habit.id ? updatedHabit : item)
-            .toList();
-    final saved = await _saveHabits(updated);
-    return saved ? updatedHabit : null;
+      final habit = _habits.firstWhere((item) => item.id == id);
+      final count = await showModalBottomSheet<double>(
+        context: context,
+        isScrollControlled: true,
+        isDismissible: true,
+        enableDrag: false,
+        backgroundColor: Colors.transparent,
+        builder:
+            (_) => _DailyTrackingSheet(
+              habit: habit,
+              today: day,
+              repository: widget.repository,
+              initialNote: initialNote,
+            ),
+      );
+      if (count == null || !mounted) return null;
+
+      final result = await _saveTrackingChange(
+        id,
+        (current) => current.setCount(day, count),
+      );
+      return result.habit;
+    } finally {
+      _trackingEditorOpen = false;
+    }
+  }
+
+  Future<({Habit? habit, bool openEditor})> _saveTrackingChange(
+    String id,
+    Habit? Function(Habit) change,
+  ) {
+    final write = _trackingWrites.then((_) async {
+      if (!mounted) return (habit: null, openEditor: false);
+      final current = _habits.firstWhere((habit) => habit.id == id);
+      final updated = change(current);
+      if (updated == null) return (habit: null, openEditor: true);
+      final saved = await _saveHabits([
+        for (final habit in _habits) habit.id == id ? updated : habit,
+      ]);
+      return (habit: saved ? updated : null, openEditor: false);
+    });
+    _trackingWrites = write.then<void>((_) {});
+    return write;
   }
 
   Future<bool> _saveHabits(List<Habit> habits) async {
@@ -311,9 +338,13 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   Habit get _habit => widget.habit;
   bool get _isYesNo => _habit.trackingMode == TrackingMode.yesNo;
   bool get _isQuit => _habit.type == HabitType.quit;
-  double get _goal => _isYesNo ? 1 : _habit.target;
-  double get _progress =>
-      _isQuit ? (_count == 0 ? 1 : 0) : (_count / _goal).clamp(0, 1);
+  double get _goal => _isYesNo ? 1 : _habit.dailyTrackingThreshold;
+  double get _progress {
+    if (_isQuit && !_habit.hasQuitLimit) {
+      return _habit.meetsQuitLimit(_count) ? 1 : 0;
+    }
+    return (_count / _goal).clamp(0, 1);
+  }
 
   @override
   void initState() {
@@ -622,13 +653,15 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Expanded(
-                          child: _quickButton(
-                            'Goal',
-                            () => _setCount(_habit.target),
+                        if (!_isQuit) ...[
+                          Expanded(
+                            child: _quickButton(
+                              'Goal',
+                              () => _setCount(_habit.target),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
+                          const SizedBox(width: 8),
+                        ],
                         Expanded(
                           child: _quickButton('Reset', () => _setCount(0)),
                         ),
@@ -771,6 +804,9 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   );
 
   String _goalLabel(String unit) {
+    if (_isQuit && _habit.hasQuitLimit) {
+      return 'Stay under ${_formatCount(_habit.quitLimit)} $unit';
+    }
     if (_isQuit) return 'Goal 0 $unit';
     return 'Goal ${_formatCount(_goal)} $unit';
   }
@@ -822,6 +858,13 @@ class _HabitCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = Color(habit.colorValue);
     final completedToday = habit.isCompleteOn(today);
+    final isQuit = habit.type == HabitType.quit;
+    final threshold = habit.dailyTrackingThreshold;
+    var fillStrength = completedToday ? 1.0 : 0.0;
+    if (habit.trackingMode != TrackingMode.yesNo && threshold > 0) {
+      final progress = (habit.countOn(today) / threshold).clamp(0.0, 1.0);
+      fillStrength = isQuit ? (completedToday ? 1 - progress : 0) : progress;
+    }
     return Material(
       color: AppColors.charcoalGrey,
       borderRadius: BorderRadius.circular(22),
@@ -881,7 +924,7 @@ class _HabitCard extends StatelessWidget {
                     height: 54,
                     child: IconButton.filled(
                       tooltip:
-                          habit.type == HabitType.quit
+                          isQuit && habit.trackingMode == TrackingMode.yesNo
                               ? completedToday
                                   ? 'Record a slip'
                                   : 'Clear today’s slip'
@@ -892,22 +935,16 @@ class _HabitCard extends StatelessWidget {
                               : 'Track today',
                       onPressed: onTrack,
                       style: IconButton.styleFrom(
-                        backgroundColor:
-                            completedToday
-                                ? color
-                                : color.withValues(alpha: 0.2),
+                        backgroundColor: color.withValues(
+                          alpha: 0.2 + 0.8 * fillStrength,
+                        ),
                         foregroundColor:
-                            completedToday ? AppColors.carbon : color,
+                            fillStrength >= 0.5 ? AppColors.carbon : color,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(17),
                         ),
                       ),
-                      icon: Icon(
-                        completedToday
-                            ? Icons.check_rounded
-                            : Icons.check_rounded,
-                        size: 30,
-                      ),
+                      icon: const Icon(Icons.check_rounded, size: 30),
                     ),
                   ),
                 ],

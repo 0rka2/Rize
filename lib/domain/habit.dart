@@ -41,6 +41,7 @@ class HabitSettings {
     required this.type,
     required this.trackingMode,
     required this.target,
+    this.quitLimit = 0,
     required this.unit,
     required this.tapAction,
     required this.goalPeriod,
@@ -56,6 +57,7 @@ class HabitSettings {
   final HabitType type;
   final TrackingMode trackingMode;
   final double target;
+  final double quitLimit;
   final String unit;
   final TapAction tapAction;
   final GoalPeriod goalPeriod;
@@ -74,6 +76,7 @@ class Habit {
     this.type = HabitType.build,
     this.trackingMode = TrackingMode.count,
     this.target = 1,
+    this.quitLimit = 0,
     this.unit = 'times',
     this.tapAction = TapAction.addOne,
     this.goalPeriod = GoalPeriod.none,
@@ -92,6 +95,7 @@ class Habit {
   final HabitType type;
   final TrackingMode trackingMode;
   final double target;
+  final double quitLimit;
   final String unit;
   final TapAction tapAction;
   final GoalPeriod goalPeriod;
@@ -103,16 +107,25 @@ class Habit {
 
   double countOn(DateTime day) => (dailyCounts[dayKey(day)] ?? 0).toDouble();
 
+  double get dailyTrackingThreshold =>
+      type == HabitType.quit ? quitLimit : target;
+
+  bool get hasQuitLimit => trackingMode != TrackingMode.yesNo && quitLimit > 0;
+
+  bool meetsQuitLimit(num count) =>
+      hasQuitLimit ? count < quitLimit : count == 0;
+
+  bool isSlipFreeOn(DateTime day) => countOn(day) == 0 && isCompleteOn(day);
+
   bool isCompleteOn(DateTime day) {
     final count = countOn(day);
     if (type == HabitType.quit) {
       final started = startDate ?? DateTime.now();
       final startedDay = DateTime(started.year, started.month, started.day);
       final checkedDay = DateTime(day.year, day.month, day.day);
-      final explicitlyMarkedSober =
-          dailyCounts.containsKey(dayKey(day)) && count == 0;
-      return explicitlyMarkedSober ||
-          (!checkedDay.isBefore(startedDay) && count == 0);
+      return meetsQuitLimit(count) &&
+          (!checkedDay.isBefore(startedDay) ||
+              dailyCounts.containsKey(dayKey(day)));
     }
     if (trackingMode == TrackingMode.yesNo) return count > 0;
     return count >= target;
@@ -390,6 +403,7 @@ class Habit {
     HabitType? type,
     TrackingMode? trackingMode,
     double? target,
+    double? quitLimit,
     String? unit,
     TapAction? tapAction,
     GoalPeriod? goalPeriod,
@@ -407,6 +421,7 @@ class Habit {
     type: type ?? this.type,
     trackingMode: trackingMode ?? this.trackingMode,
     target: target ?? this.target,
+    quitLimit: quitLimit ?? this.quitLimit,
     unit: unit ?? this.unit,
     tapAction: tapAction ?? this.tapAction,
     goalPeriod: goalPeriod ?? this.goalPeriod,
@@ -425,6 +440,7 @@ class Habit {
     type: settings.type,
     trackingMode: settings.trackingMode,
     target: settings.target,
+    quitLimit: settings.quitLimit,
     unit: settings.unit,
     tapAction: settings.tapAction,
     goalPeriod: settings.goalPeriod,

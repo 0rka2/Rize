@@ -13,12 +13,14 @@ class _MemoryHabitRepository extends HabitRepository {
   List<Habit> habits = [];
   final Map<String, String> notes = {};
   bool failSavingNotes = false;
+  Duration saveDelay = Duration.zero;
 
   @override
   Future<List<Habit>> loadHabits() async => habits;
 
   @override
   Future<void> saveHabits(List<Habit> habits) async {
+    if (saveDelay != Duration.zero) await Future<void>.delayed(saveDelay);
     this.habits = habits;
   }
 
@@ -599,74 +601,106 @@ void main() {
     expect(trackingWasCalled, isFalse);
   });
 
-  testWidgets('add-one tap tracks to the goal, then opens the editor', (
+  testWidgets('add-one tap opens the editor after reaching the build goal', (
     tester,
   ) async {
+    final today = DateUtils.dateOnly(DateTime.now());
     final repository =
         _MemoryHabitRepository()
-          ..habits = [const Habit(id: 'read', name: 'Read', target: 2)];
+          ..habits = [
+            Habit(
+              id: 'read',
+              name: 'Read',
+              target: 5,
+              dailyCounts: {dayKey(today): 4},
+            ),
+          ];
     await tester.pumpWidget(
       MaterialApp(home: HomeScreen(repository: repository)),
     );
     await tester.pumpAndSettle();
 
+    final trackButton = find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == 'Track today',
+    );
+    double fillOpacity() =>
+        tester
+            .widget<IconButton>(trackButton)
+            .style!
+            .backgroundColor!
+            .resolve({})!
+            .a;
+    expect(fillOpacity(), closeTo(0.84, 0.001));
+
     await tester.tap(find.byTooltip('Track today'));
     await tester.pumpAndSettle();
-    expect(repository.habits.single.countOn(DateTime.now()), 1);
+    expect(repository.habits.single.countOn(today), 5);
+    expect(fillOpacity(), 1);
     expect(find.byKey(const Key('tracking-count')), findsNothing);
 
     await tester.tap(find.byTooltip('Track today'));
     await tester.pumpAndSettle();
-    expect(repository.habits.single.countOn(DateTime.now()), 2);
-    expect(find.byKey(const Key('tracking-count')), findsNothing);
-
-    await tester.tap(find.byTooltip('Track today'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('tracking-count')), findsOneWidget);
+    final input = find.byKey(const Key('tracking-count'));
+    expect(tester.widget<TextField>(input).controller!.text, '5');
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
-    expect(repository.habits.single.countOn(DateTime.now()), 2);
+    expect(input, findsNothing);
+    expect(repository.habits.single.countOn(today), 5);
   });
 
-  testWidgets('calendar taps add one until the goal, then open the editor', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(800, 1200);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final today = DateTime.now();
-    final day = DateTime(today.year, today.month, today.day);
-    final repository =
-        _MemoryHabitRepository()
-          ..habits = [const Habit(id: 'read', name: 'Read', target: 2)];
-    await tester.pumpWidget(
-      MaterialApp(home: HomeScreen(repository: repository)),
+  for (final type in HabitType.values) {
+    testWidgets(
+      'calendar add-one opens the editor after the ${type.name} cutoff',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1200);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final today = DateTime.now();
+        final day = DateTime(today.year, today.month);
+        final repository =
+            _MemoryHabitRepository()
+              ..habits = [
+                Habit(
+                  id: 'read',
+                  name: 'Read',
+                  type: type,
+                  target: 5,
+                  quitLimit: 5,
+                  startDate: day,
+                  dailyCounts: {dayKey(day): 4},
+                ),
+              ];
+        await tester.pumpWidget(
+          MaterialApp(home: HomeScreen(repository: repository)),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Read'));
+        await tester.pumpAndSettle();
+
+        final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
+        await tester.scrollUntilVisible(
+          dayCell,
+          250,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(dayCell);
+        await tester.pumpAndSettle();
+        expect(repository.habits.single.countOn(day), 5);
+        expect(find.byKey(const Key('tracking-count')), findsNothing);
+
+        await tester.tap(dayCell);
+        await tester.pumpAndSettle();
+        final input = find.byKey(const Key('tracking-count'));
+        expect(tester.widget<TextField>(input).controller!.text, '5');
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pumpAndSettle();
+        expect(input, findsNothing);
+        expect(repository.habits.single.countOn(day), 5);
+      },
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Read'));
-    await tester.pumpAndSettle();
-
-    final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
-    await tester.scrollUntilVisible(
-      dayCell,
-      250,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.tap(dayCell);
-    await tester.pumpAndSettle();
-    expect(repository.habits.single.countOn(day), 1);
-    expect(find.byKey(const Key('tracking-count')), findsNothing);
-
-    await tester.tap(dayCell);
-    await tester.pumpAndSettle();
-    expect(repository.habits.single.countOn(day), 2);
-    expect(find.byKey(const Key('tracking-count')), findsNothing);
-
-    await tester.tap(dayCell);
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('tracking-count')), findsOneWidget);
-  });
+  }
 
   testWidgets('long-pressing a calendar day opens its note editor', (
     tester,
@@ -803,13 +837,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(repository.habits.single.countOn(DateTime.now()), 1);
       expect(find.byKey(const Key('tracking-count')), findsNothing);
-
-      await tester.tap(find.byTooltip('Track today'));
-      await tester.pumpAndSettle();
-      expect(find.text('Today'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('tracking-save')));
-      await tester.pumpAndSettle();
-      expect(repository.habits.single.countOn(DateTime.now()), 1);
 
       await tester.tap(find.text('Drink water'));
       await tester.pumpAndSettle();
@@ -1004,6 +1031,174 @@ void main() {
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isTrue);
     expect(find.byKey(const Key('tracking-save')), findsNothing);
   });
+
+  testWidgets('quit habits save and track against a daily count limit', (
+    tester,
+  ) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final repository =
+        _MemoryHabitRepository()
+          ..habits = [
+            Habit(
+              id: 'soda',
+              name: 'Limit soda',
+              type: HabitType.quit,
+              startDate: today,
+            ),
+          ];
+    await tester.pumpWidget(RizeApp(repository: repository));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Limit soda'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Edit habit'));
+    await tester.pumpAndSettle();
+
+    final goal = find.byKey(const Key('habit-goal'));
+    await tester.scrollUntilVisible(
+      goal,
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('DAILY LIMIT'), findsOneWidget);
+    expect(tester.widget<TextField>(goal).controller!.text, '0');
+    await tester.enterText(goal, '5');
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.quitLimit, 5);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    final cell = find.byKey(ValueKey('habit-heatmap-${dayKey(today)}'));
+    Color? heatmapColor() =>
+        (tester.widget<Container>(cell).decoration! as BoxDecoration).color;
+    final track = find.byTooltip('Track today');
+    final input = find.byKey(const Key('tracking-count'));
+    ButtonStyle trackStyle() =>
+        tester
+            .widget<IconButton>(
+              find.byWidgetPredicate(
+                (widget) =>
+                    widget is IconButton && widget.tooltip == 'Track today',
+              ),
+            )
+            .style!;
+    Color? buttonFill() => trackStyle().backgroundColor?.resolve({});
+    Color? checkColor() => trackStyle().foregroundColor?.resolve({});
+
+    expect(buttonFill(), AppColors.burntOrange);
+    expect(checkColor(), AppColors.carbon);
+    for (var i = 0; i < 2; i++) {
+      await tester.tap(track);
+    }
+    await tester.pumpAndSettle();
+    expect(buttonFill()!.a, closeTo(0.68, 0.001));
+    for (var i = 0; i < 2; i++) {
+      await tester.tap(track);
+    }
+    await tester.pumpAndSettle();
+    expect(input, findsNothing);
+    expect(repository.habits.single.countOn(today), 4);
+    expect(repository.habits.single.isCompleteOn(today), isTrue);
+    expect(heatmapColor(), AppColors.burntOrange);
+    expect(buttonFill()!.a, closeTo(0.36, 0.001));
+    expect(checkColor(), AppColors.burntOrange);
+
+    repository.saveDelay = const Duration(milliseconds: 20);
+    await tester.tap(track);
+    await tester.tap(track);
+    await tester.tap(track);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(input).controller!.text, '5');
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(input, findsNothing);
+    expect(repository.habits.single.countOn(today), 5);
+    expect(repository.habits.single.isCompleteOn(today), isFalse);
+    expect(heatmapColor(), AppColors.carbon);
+    expect(buttonFill(), AppColors.burntOrange.withValues(alpha: 0.2));
+    expect(checkColor(), AppColors.burntOrange);
+    await tester.tap(find.text('Limit soda'));
+    await tester.pumpAndSettle();
+    expect(find.text('0 days'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Edit habit'));
+    await tester.pumpAndSettle();
+    final enterTotal = find.text('Enter total');
+    await tester.scrollUntilVisible(
+      enterTotal,
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(enterTotal);
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    await tester.tap(track);
+    await tester.pumpAndSettle();
+    expect(find.text('Stay under 5 times'), findsOneWidget);
+    expect(find.text('100%'), findsOneWidget);
+    await tester.enterText(input, '4');
+    await tester.pump();
+    expect(find.text('80%'), findsOneWidget);
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      0.8,
+    );
+    await tester.tap(find.byKey(const Key('tracking-save')));
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.countOn(today), 4);
+  });
+
+  for (final (type, cutoff, initial, expected) in [
+    (HabitType.quit, 0.0, 0.0, 0.0),
+    (HabitType.build, 2.5, 2.0, 2.5),
+    (HabitType.quit, 2.5, 2.0, 3.0),
+  ]) {
+    testWidgets('add-one handles a ${type.name} cutoff of $cutoff', (
+      tester,
+    ) async {
+      final today = DateUtils.dateOnly(DateTime.now());
+      final habit = Habit(
+        id: 'test',
+        name: 'Track amount',
+        type: type,
+        startDate: today,
+        trackingMode: TrackingMode.measure,
+        target: type == HabitType.build ? cutoff : 1,
+        quitLimit: type == HabitType.quit ? cutoff : 0,
+        dailyCounts: {if (initial > 0) dayKey(today): initial},
+      );
+      final repository = _MemoryHabitRepository()..habits = [habit];
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      final track = find.byTooltip('Track today');
+      final input = find.byKey(const Key('tracking-count'));
+      if (initial < cutoff) {
+        await tester.tap(track);
+        await tester.pumpAndSettle();
+        expect(input, findsNothing);
+        expect(repository.habits.single.countOn(today), expected);
+      }
+      await tester.tap(track);
+      await tester.pumpAndSettle();
+      expect(
+        double.parse(tester.widget<TextField>(input).controller!.text),
+        expected,
+      );
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(input, findsNothing);
+      expect(repository.habits.single.countOn(today), expected);
+      if (cutoff == 0) expect(repository.habits.single.dailyCounts, isEmpty);
+    });
+  }
 
   testWidgets('enter-total tracking saves fractional measured amounts', (
     tester,
@@ -1430,6 +1625,7 @@ void main() {
       200,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.pumpAndSettle();
     await tester.tap(selector);
     await tester.pumpAndSettle();
 

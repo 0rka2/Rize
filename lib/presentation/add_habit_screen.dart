@@ -44,6 +44,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   late final TextEditingController _nameController;
   late final TextEditingController _descriptionController;
   late final TextEditingController _targetController;
+  late final TextEditingController _quitLimitController;
   late final TextEditingController _unitController;
   late int _colorValue;
   late String _icon;
@@ -60,6 +61,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _nameController.text,
     _descriptionController.text,
     _targetController.text,
+    _quitLimitController.text,
     _unitController.text,
     _colorValue,
     _icon,
@@ -91,6 +93,13 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _targetController = TextEditingController(
       text: (habit?.target ?? 1).toString(),
     );
+    final quitLimit = habit?.quitLimit ?? 0;
+    _quitLimitController = TextEditingController(
+      text:
+          quitLimit == quitLimit.truncateToDouble()
+              ? quitLimit.toInt().toString()
+              : quitLimit.toString(),
+    );
     _unitController = TextEditingController(
       text:
           habit?.trackingMode == TrackingMode.measure ? habit?.unit ?? '' : '',
@@ -112,6 +121,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _nameController.dispose();
     _descriptionController.dispose();
     _targetController.dispose();
+    _quitLimitController.dispose();
     _unitController.dispose();
     super.dispose();
   }
@@ -120,10 +130,21 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     final name = _nameController.text.trim();
     final targetText = _targetController.text.trim();
     final target = double.tryParse(targetText);
+    final quitLimit = double.tryParse(_quitLimitController.text.trim());
+    final validQuitLimit =
+        quitLimit != null &&
+        quitLimit.isFinite &&
+        quitLimit >= 0 &&
+        quitLimit <= 999999 &&
+        (_trackingMode != TrackingMode.count ||
+            quitLimit == quitLimit.truncateToDouble());
     final unit = _unitController.text.trim();
     if (name.isEmpty ||
         ((_type == HabitType.build && _trackingMode != TrackingMode.yesNo) &&
             (target == null || target <= 0 || target > 999999)) ||
+        (_type == HabitType.quit &&
+            _trackingMode != TrackingMode.yesNo &&
+            !validQuitLimit) ||
         (_trackingMode == TrackingMode.measure && unit.isEmpty)) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -144,6 +165,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
         type: _type,
         trackingMode: _trackingMode,
         target: target ?? 1,
+        quitLimit: validQuitLimit ? quitLimit : widget.habit?.quitLimit ?? 0,
         unit:
             _trackingMode == TrackingMode.measure
                 ? unit
@@ -159,10 +181,18 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     );
   }
 
+  TextEditingController get _dailyAmountController =>
+      _type == HabitType.quit ? _quitLimitController : _targetController;
+
   void _adjustDailyGoal(int amount) {
-    final current = int.tryParse(_targetController.text) ?? 1;
-    final next = (current + amount).clamp(1, 999999);
-    setState(() => _targetController.text = '$next');
+    final minimum = _type == HabitType.quit ? 0 : 1;
+    final enteredAmount = double.tryParse(_dailyAmountController.text);
+    final current =
+        enteredAmount != null && enteredAmount.isFinite
+            ? enteredAmount.clamp(minimum, 999999).toInt()
+            : minimum;
+    final next = (current + amount).clamp(minimum, 999999);
+    setState(() => _dailyAmountController.text = '$next');
   }
 
   @override
@@ -175,6 +205,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
 
   Widget _buildForm(BuildContext context) {
     final accent = Color(_colorValue);
+    final isQuit = _type == HabitType.quit;
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.habit == null ? 'New Habit' : 'Edit Habit'),
@@ -269,7 +300,9 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                   Text(
                     _type == HabitType.build
                         ? 'Mark each day you complete it.'
-                        : 'Days without a recorded slip count as successful.',
+                        : _trackingMode == TrackingMode.yesNo
+                        ? 'Days without a recorded slip count as successful.'
+                        : 'Days under your daily limit count as successful.',
                     textAlign: TextAlign.center,
                     style: _hintStyle(context),
                   ),
@@ -302,50 +335,63 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                     ),
                     const SizedBox(height: 14),
                   ],
-                  if (_trackingMode == TrackingMode.count &&
-                      _type == HabitType.build) ...[
+                  if (_trackingMode == TrackingMode.count) ...[
                     const SizedBox(height: 20),
-                    _label('Daily goal'),
+                    _label(isQuit ? 'Daily limit' : 'Daily goal'),
                     Row(
                       children: [
                         Expanded(
                           child: TextField(
                             key: const Key('habit-goal'),
-                            controller: _targetController,
+                            controller: _dailyAmountController,
                             keyboardType: TextInputType.number,
                             inputFormatters: [
                               FilteringTextInputFormatter.digitsOnly,
                             ],
-                            decoration: _decoration('1 / Day'),
+                            decoration: _decoration(
+                              isQuit ? '0 / Day' : '1 / Day',
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
                         IconButton(
-                          tooltip: 'Decrease daily goal',
+                          tooltip:
+                              isQuit
+                                  ? 'Decrease daily limit'
+                                  : 'Decrease daily goal',
                           onPressed: () => _adjustDailyGoal(-1),
                           icon: const Icon(Icons.remove),
                         ),
                         IconButton(
-                          tooltip: 'Increase daily goal',
+                          tooltip:
+                              isQuit
+                                  ? 'Increase daily limit'
+                                  : 'Increase daily goal',
                           onPressed: () => _adjustDailyGoal(1),
                           icon: const Icon(Icons.add),
                         ),
                       ],
                     ),
                   ],
-                  if (_trackingMode == TrackingMode.measure &&
-                      _type == HabitType.build) ...[
-                    _label('Daily goal'),
+                  if (_trackingMode == TrackingMode.measure) ...[
+                    _label(isQuit ? 'Daily limit' : 'Daily goal'),
                     TextField(
                       key: const Key('habit-goal'),
-                      controller: _targetController,
+                      controller: _dailyAmountController,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
                       inputFormatters: [
                         FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                       ],
-                      decoration: _decoration('Goal'),
+                      decoration: _decoration(isQuit ? 'Limit' : 'Goal'),
+                    ),
+                  ],
+                  if (isQuit && _trackingMode != TrackingMode.yesNo) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Stay below this amount. Set it to 0 for slip-free days.',
+                      style: _hintStyle(context),
                     ),
                   ],
                   if (_trackingMode == TrackingMode.count ||
@@ -360,12 +406,14 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      _tapAction == TapAction.addOne
-                          ? _trackingMode == TrackingMode.count ||
-                                  _trackingMode == TrackingMode.measure
-                              ? 'Adds one. At your goal, opens the editor.'
-                              : 'The corner button adds one to today.'
-                          : 'The corner button opens today’s total for editing.',
+                      switch (_tapAction) {
+                        TapAction.addOne when isQuit =>
+                          'Adds one below your daily limit. At the limit, the next tap opens the editor.',
+                        TapAction.addOne =>
+                          'Adds one up to your daily goal. At the goal, the next tap opens the editor.',
+                        TapAction.enterTotal =>
+                          'The corner button opens today’s total for editing.',
+                      },
                       textAlign: TextAlign.center,
                       style: _hintStyle(context),
                     ),
@@ -440,7 +488,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
           : 'Count daily repetitions.',
     TrackingMode.measure =>
       _type == HabitType.quit
-          ? 'Record the amount of a slip and keep slip-free days clear.'
+          ? 'Record the amount for the day.'
           : 'Log amounts with a unit, such as 2 L of water or 7.5 km.',
   };
 

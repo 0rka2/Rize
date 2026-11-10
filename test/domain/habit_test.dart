@@ -92,17 +92,47 @@ void main() {
 
     test('quit habits are successful until a slip is recorded', () {
       final today = DateTime(2026, 10, 27);
-      final habit = const Habit(
+      final habit = Habit(
         id: 'soda',
         name: 'Quit soda',
         type: HabitType.quit,
         trackingMode: TrackingMode.measure,
+        startDate: today,
       );
 
       expect(habit.isCompleteOn(today), isTrue);
       final slip = habit.setCount(today, 0.5);
       expect(slip.isCompleteOn(today), isFalse);
       expect(slip.removeCount(today).isCompleteOn(today), isTrue);
+    });
+
+    test('quit limits require staying strictly under the amount', () {
+      final today = shiftHabitDay(DateTime.now(), 0);
+      final yesterday = shiftHabitDay(today, -1);
+      final habit = Habit(
+        id: 'soda',
+        name: 'Limit soda',
+        type: HabitType.quit,
+        trackingMode: TrackingMode.measure,
+        startDate: yesterday,
+        goalPeriod: GoalPeriod.daily,
+        quitLimit: 2.5,
+      ).setCount(yesterday, 2.25);
+
+      expect(habit.periodGoalReached(yesterday), isTrue);
+      expect(habit.isSlipFreeOn(yesterday), isFalse);
+      expect(habit.setCount(yesterday, 2.5).isCompleteOn(yesterday), isFalse);
+      expect(habit.setCount(yesterday, 3).isCompleteOn(yesterday), isFalse);
+      expect(habit.copyWith(quitLimit: 0).isCompleteOn(yesterday), isFalse);
+      expect(
+        habit
+            .copyWith(trackingMode: TrackingMode.yesNo)
+            .isCompleteOn(yesterday),
+        isFalse,
+      );
+      final earlier = shiftHabitDay(yesterday, -1);
+      expect(habit.isCompleteOn(earlier), isFalse);
+      expect(habit.setCount(earlier, 0).isSlipFreeOn(earlier), isTrue);
     });
 
     test(

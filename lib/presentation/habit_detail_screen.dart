@@ -76,7 +76,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
       _editNoteForDay(DateTime.now(), allowDateChange: true);
 
   Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
-    if (isSlip ? _habit.countOn(day) > 0 : _habit.isCompleteOn(day)) return;
+    if (isSlip ? _habit.countOn(day) > 0 : _habit.isSlipFreeOn(day)) return;
     final updated =
         widget.onSetSlipDay == null
             ? await widget.onTrackDay(day)
@@ -613,7 +613,7 @@ class _NoteEditorState extends State<_NoteEditor> {
 
     final color = Color(habit.colorValue);
     final isSlip = habit.countOn(_day) > 0;
-    final isSober = habit.isCompleteOn(_day);
+    final isSober = habit.isSlipFreeOn(_day);
     return UnsavedChangesGuard(
       color: color,
       hasUnsavedChanges: () => _hasUnsavedChanges,
@@ -812,7 +812,7 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
   Future<void> _addNote() => _editNote(DateTime.now(), allowDateChange: true);
 
   Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
-    if (isSlip ? _habit.countOn(day) > 0 : _habit.isCompleteOn(day)) return;
+    if (isSlip ? _habit.countOn(day) > 0 : _habit.isSlipFreeOn(day)) return;
     final updated = await widget.onSetSlipDay(day, isSlip);
     if (updated != null && mounted) setState(() => _habit = updated);
   }
@@ -1269,7 +1269,10 @@ class _CalendarCardState extends State<_CalendarCard> {
         final isFuture = day.isAfter(localToday);
         final value = widget.habit.countOn(day);
         final complete = !isFuture && widget.habit.isCompleteOn(day);
-        final slip = widget.habit.type == HabitType.quit && value > 0;
+        final slip =
+            widget.habit.type == HabitType.quit &&
+            value > 0 &&
+            !widget.habit.meetsQuitLimit(value);
         final partial =
             value > 0 && !complete && widget.habit.type != HabitType.quit;
         final hasNote = widget.noteDays.contains(dayKey(day));
@@ -1375,7 +1378,7 @@ String _periodProgressLabel(BuildContext context, Habit habit, DateTime day) {
   return switch (habit.goalPeriod) {
     GoalPeriod.none =>
       habit.type == HabitType.quit
-          ? 'Slip-free days'
+          ? (habit.hasQuitLimit ? 'Days within the limit' : 'Slip-free days')
           : habit.trackingMode == TrackingMode.yesNo
           ? 'Done days are marked'
           : habit.trackingMode == TrackingMode.count
@@ -1416,20 +1419,28 @@ String _streakLabel(Habit habit, DateTime today) {
   }
 
   final todayKey = dayKey(today);
-  final slipDays =
+  final missedDays =
       habit.dailyCounts.entries
           .where(
-            (entry) => entry.value > 0 && entry.key.compareTo(todayKey) <= 0,
+            (entry) =>
+                !habit.meetsQuitLimit(entry.value) &&
+                entry.key.compareTo(todayKey) <= 0,
           )
           .map((entry) => entry.key)
           .toList()
         ..sort();
-  if (slipDays.isEmpty) return 'No slips yet';
+  if (missedDays.isEmpty) {
+    return habit.hasQuitLimit ? 'No missed days' : 'No slips yet';
+  }
 
-  final parts = slipDays.last.split('-').map(int.parse).toList();
-  final lastSlip = DateTime(parts[0], parts[1], parts[2]);
+  final parts = missedDays.last.split('-').map(int.parse).toList();
+  final lastMissedDay = DateTime.utc(parts[0], parts[1], parts[2]);
   final streak =
-      DateTime(today.year, today.month, today.day).difference(lastSlip).inDays;
+      DateTime.utc(
+        today.year,
+        today.month,
+        today.day,
+      ).difference(lastMissedDay).inDays;
   return '$streak ${streak == 1 ? 'day' : 'days'}';
 }
 
