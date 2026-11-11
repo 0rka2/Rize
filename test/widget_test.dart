@@ -262,6 +262,134 @@ void main() {
     );
   });
 
+  testWidgets('detail pills update after a check-in and a repeat edit', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final today = DateUtils.dateOnly(DateTime.now());
+    const color = Color(0xFFA4E635);
+    var habit = const Habit(
+      id: 'read',
+      name: 'Read',
+      goalPeriod: GoalPeriod.weekly,
+      colorValue: 0xFFA4E635,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: _MemoryHabitRepository(),
+          onEdit:
+              () async =>
+                  habit = habit.copyWith(
+                    goalPeriod: GoalPeriod.monthly,
+                    monthlyGoalTarget: 7,
+                  ),
+          onTrackDay: (day) async => habit = habit.setCount(day, 1),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final pills = find.byType(HabitProgressIndicators);
+    Finder pillIcon(IconData icon) =>
+        find.descendant(of: pills, matching: find.byIcon(icon));
+
+    expect(find.text('0 days'), findsOneWidget);
+    expect(find.text('0 of 1 this week'), findsOneWidget);
+    expect(pillIcon(Icons.repeat_rounded), findsOneWidget);
+    expect(
+      tester.widget<Icon>(pillIcon(Icons.local_fire_department_outlined)).color,
+      color,
+    );
+
+    final todayCell = find.byKey(ValueKey('calendar-day-${dayKey(today)}'));
+    await tester.tap(todayCell);
+    await tester.pumpAndSettle();
+    expect(find.text('1 day'), findsOneWidget);
+    expect(find.text('1 of 1 this week'), findsOneWidget);
+    expect(pillIcon(Icons.check_rounded), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Edit habit'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 of 7 this month'), findsOneWidget);
+    expect(pillIcon(Icons.repeat_rounded), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 of 7 this month'), findsOneWidget);
+  });
+
+  testWidgets('detail pills show the configured repeat schedule', (
+    tester,
+  ) async {
+    const buildHabit = Habit(id: 'read', name: 'Read');
+    const quitHabit = Habit(id: 'soda', name: 'Soda', type: HabitType.quit);
+    final schedules = [
+      (buildHabit, 'No repeat goal'),
+      (buildHabit.copyWith(goalPeriod: GoalPeriod.daily), 'Every day'),
+      (buildHabit.copyWith(goalPeriod: GoalPeriod.specificDays), 'Mon–Fri'),
+      (
+        buildHabit.copyWith(goalPeriod: GoalPeriod.everyFewDays),
+        'Every 5 days',
+      ),
+      (quitHabit, 'Slip-free days'),
+      (quitHabit.copyWith(quitLimit: 2), 'Days within the limit'),
+    ];
+
+    for (final (habit, label) in schedules) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HabitDetailScreen(
+            key: ValueKey(label),
+            habit: habit,
+            repository: _MemoryHabitRepository(),
+            onEdit: () async => null,
+            onTrackDay: (_) async => null,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(label), findsOneWidget);
+    }
+  });
+
+  testWidgets('detail pills wrap at larger text sizes on narrow screens', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    const streakLabel = '2 days';
+    const repeatLabel = 'Days within the limit';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery.withClampedTextScaling(
+          minScaleFactor: 2,
+          child: const Align(
+            alignment: Alignment.topLeft,
+            child: HabitProgressIndicators(
+              streakLabel: streakLabel,
+              goalLabel: repeatLabel,
+              goalReached: false,
+              color: Color(0xFFA4E635),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final streak = tester.getRect(find.text(streakLabel));
+    final repeat = tester.getRect(find.text(repeatLabel));
+    expect(repeat.top, greaterThan(streak.bottom));
+    expect(repeat.right, lessThanOrEqualTo(320));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('home habit cards show an unlabeled 180-day heatmap', (
     tester,
   ) async {
@@ -749,6 +877,54 @@ void main() {
     expect(repository.notes[dayKey(day)], 'Note for yesterday');
   });
 
+  testWidgets('tracking handle follows a downward drag and dismisses', (
+    tester,
+  ) async {
+    final repository =
+        _MemoryHabitRepository()
+          ..habits = [
+            const Habit(
+              id: 'walk',
+              name: 'Walk',
+              tapAction: TapAction.enterTotal,
+            ),
+          ];
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Track today'));
+    await tester.pumpAndSettle();
+
+    final handle = find.byKey(const Key('tracking-drag-handle'));
+    final initialTop = tester.getTopLeft(handle).dy;
+    await tester.timedDrag(
+      handle,
+      const Offset(0, -120),
+      const Duration(milliseconds: 600),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(handle).dy, initialTop);
+
+    final drag = await tester.startGesture(tester.getCenter(handle));
+    await drag.moveBy(const Offset(0, 25));
+    await drag.moveBy(const Offset(0, 15));
+    await tester.pump();
+    expect(tester.getTopLeft(handle).dy, greaterThan(initialTop));
+    await tester.pump(const Duration(milliseconds: 300));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(handle).dy, initialTop);
+
+    await tester.timedDrag(
+      handle,
+      const Offset(0, 120),
+      const Duration(milliseconds: 800),
+    );
+    await tester.pumpAndSettle();
+    expect(handle, findsNothing);
+  });
+
   testWidgets('tracking editor prompts before discarding unsaved changes', (
     tester,
   ) async {
@@ -779,10 +955,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('tracking-count')), findsOneWidget);
 
-    await tester.fling(
+    await tester.timedDrag(
       find.byKey(const Key('tracking-drag-handle')),
       const Offset(0, 180),
-      1000,
+      const Duration(milliseconds: 1000),
     );
     await tester.pumpAndSettle();
     expect(find.text('Save your changes?'), findsOneWidget);
@@ -1574,7 +1750,8 @@ void main() {
 
       await tester.tap(find.text('Stretch'));
       await tester.pumpAndSettle();
-      expect(find.text('1 check-in'), findsOneWidget);
+      expect(find.text('0 days'), findsOneWidget);
+      expect(find.text('Every 5 days'), findsOneWidget);
       expect(heatmapDecoration().color, color.withValues(alpha: 0.18));
       final calendarDay = find.byKey(ValueKey('calendar-day-${dayKey(today)}'));
       final children = find.descendant(
@@ -1601,7 +1778,7 @@ void main() {
       expect(repository.habits.single.dailyCounts, hasLength(2));
       await tester.tap(find.text('Stretch'));
       await tester.pumpAndSettle();
-      expect(find.text('2 check-ins'), findsOneWidget);
+      expect(find.text('1 day'), findsOneWidget);
     },
   );
 

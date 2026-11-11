@@ -180,8 +180,20 @@ class Habit {
       }
     }
 
+    return _countConsecutiveDays(today, allowIncompleteToday: true);
+  }
+
+  int calendarDayStreak(DateTime today) => _countConsecutiveDays(
+    today,
+    allowIncompleteToday: type == HabitType.build,
+  );
+
+  int _countConsecutiveDays(
+    DateTime today, {
+    required bool allowIncompleteToday,
+  }) {
     var day = shiftHabitDay(today, 0);
-    if (!isCompleteOn(day)) {
+    if (allowIncompleteToday && !isCompleteOn(day)) {
       day = shiftHabitDay(day, -1);
     }
 

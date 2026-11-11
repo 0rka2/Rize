@@ -393,11 +393,15 @@ class HabitProgressIndicators extends StatelessWidget {
   const HabitProgressIndicators({
     required this.streakLabel,
     required this.goalLabel,
+    required this.goalReached,
+    required this.color,
     super.key,
   });
 
   final String streakLabel;
   final String goalLabel;
+  final bool goalReached;
+  final Color color;
 
   @override
   Widget build(BuildContext context) => Wrap(
@@ -407,12 +411,13 @@ class HabitProgressIndicators extends StatelessWidget {
       _ProgressPill(
         icon: Icons.local_fire_department_outlined,
         label: streakLabel,
-        color: Color(0xFFFF7A00),
+        color: color,
       ),
       _ProgressPill(
-        icon: Icons.track_changes_rounded,
+        icon: goalReached ? Icons.check_rounded : Icons.repeat_rounded,
+        iconLabel: goalReached ? 'Repeat goal reached' : null,
         label: goalLabel,
-        color: AppColors.coolGrey,
+        color: color,
       ),
     ],
   );
@@ -423,9 +428,11 @@ class _ProgressPill extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.color,
+    this.iconLabel,
   });
 
   final IconData icon;
+  final String? iconLabel;
   final String label;
   final Color color;
 
@@ -433,13 +440,13 @@ class _ProgressPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     decoration: BoxDecoration(
-      color: AppColors.carbon,
+      color: color.withValues(alpha: 0.14),
       borderRadius: BorderRadius.circular(24),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 16, color: color),
+        Icon(icon, size: 16, color: color, semanticLabel: iconLabel),
         const SizedBox(width: 6),
         Flexible(
           child: Text(label, style: Theme.of(context).textTheme.labelLarge),

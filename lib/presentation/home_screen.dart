@@ -331,6 +331,8 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   late double _initialCount;
   late String _note;
   bool _isEditingNote = false;
+  double _dragOffset = 0;
+  bool _isDragging = false;
 
   bool get _hasUnsavedChanges =>
       _count != _initialCount || _noteController.text.trim() != _note;
@@ -426,6 +428,28 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
 
   Future<void> _requestClose() => Navigator.of(context).maybePop();
 
+  void _updateDrag(DragUpdateDetails details) {
+    setState(() {
+      _isDragging = true;
+      _dragOffset = (_dragOffset + details.delta.dy).clamp(0, double.infinity);
+    });
+  }
+
+  void _endDrag(DragEndDetails details) {
+    final shouldClose =
+        _dragOffset >= 64 ||
+        (_dragOffset > 0 && (details.primaryVelocity ?? 0) > 200);
+    if (!shouldClose || _hasUnsavedChanges) _resetDrag();
+    if (shouldClose) _requestClose();
+  }
+
+  void _resetDrag() {
+    setState(() {
+      _isDragging = false;
+      _dragOffset = 0;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = Color(_habit.colorValue);
@@ -441,7 +465,11 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
         top: false,
         child: Padding(
           padding: EdgeInsets.only(bottom: bottomInset),
-          child: Container(
+          child: AnimatedContainer(
+            duration:
+                _isDragging ? Duration.zero : const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            transform: Matrix4.translationValues(0, _dragOffset, 0),
             padding: const EdgeInsets.fromLTRB(18, 10, 18, 20),
             decoration: BoxDecoration(
               color: const Color(0xFF171719),
@@ -459,20 +487,19 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
                   GestureDetector(
                     key: const Key('tracking-drag-handle'),
                     behavior: HitTestBehavior.opaque,
-                    onVerticalDragEnd: (details) {
-                      if ((details.primaryVelocity ?? 0) > 200) _requestClose();
-                    },
+                    onVerticalDragUpdate: _updateDrag,
+                    onVerticalDragEnd: _endDrag,
+                    onVerticalDragCancel: _resetDrag,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 10,
-                      ),
-                      child: Container(
-                        width: 48,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: AppColors.coolGrey.withValues(alpha: 0.35),
-                          borderRadius: BorderRadius.circular(4),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Center(
+                        child: Container(
+                          width: 48,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: AppColors.coolGrey.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
                         ),
                       ),
                     ),

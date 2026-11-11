@@ -292,6 +292,65 @@ void main() {
       );
     });
 
+    test('calendar-day streak counts real completions across a quota', () {
+      final monday = DateTime(2026, 11, 9);
+      final friday = shiftHabitDay(monday, 4);
+      final saturday = shiftHabitDay(friday, 1);
+      final habit = Habit(
+        id: 'read',
+        name: 'Read',
+        target: 2,
+        goalPeriod: GoalPeriod.weekly,
+        weeklyGoalTarget: 3,
+        startDate: monday,
+        buildRepeat: (
+          weekdays: repeatWeekdays,
+          gapDays: 5,
+          countWeeks: true,
+          countMonths: false,
+          fillWeeks: true,
+          fillMonths: false,
+          fillGaps: false,
+        ),
+        dailyCounts: {
+          for (final offset in [0, 2, 4])
+            dayKey(shiftHabitDay(monday, offset)): 2,
+          dayKey(saturday): 1,
+        },
+      );
+
+      expect(
+        habit.successfulDaysInPeriod(friday, GoalPeriod.weekly, today: friday),
+        3,
+      );
+      expect(habit.repeatMarks(monday, friday, today: friday).values, [
+        RepeatMark.filled,
+        RepeatMark.filled,
+      ]);
+      expect(habit.calendarDayStreak(friday), 1);
+      expect(habit.calendarDayStreak(saturday), 1);
+      expect(habit.calendarDayStreak(shiftHabitDay(saturday, 1)), 0);
+      expect(habit.currentStreak(saturday), 1);
+    });
+
+    test('quit calendar-day streak honors the start date and resets today', () {
+      final today = DateTime(2026, 11, 12);
+      final startDate = shiftHabitDay(today, -1);
+      final beforeStart = shiftHabitDay(startDate, -1);
+      final habit = Habit(
+        id: 'soda',
+        name: 'Limit soda',
+        type: HabitType.quit,
+        quitLimit: 2,
+        startDate: startDate,
+      ).setCount(today, 1);
+
+      expect(habit.calendarDayStreak(today), 2);
+      expect(habit.setCount(beforeStart, 0).calendarDayStreak(today), 3);
+      expect(habit.setCount(today, 2).calendarDayStreak(today), 0);
+      expect(habit.copyWith(quitLimit: 0).calendarDayStreak(today), 0);
+    });
+
     test('a short month closes without qualifying for a 31-day goal', () {
       final habit = Habit(
         id: 'read',

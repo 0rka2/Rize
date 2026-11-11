@@ -7,6 +7,7 @@ import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'habit_heatmap.dart';
 import 'habit_icons.dart';
+import 'repeat_picker_screen.dart' show specificDaysLabel;
 import 'unsaved_changes.dart';
 
 class HabitDetailScreen extends StatefulWidget {
@@ -247,6 +248,8 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final heatmapStart = _heatmapStart(today);
+    final streak = _habit.calendarDayStreak(today);
+    final (repeatLabel, quotaReached) = _repeatProgress(_habit, today);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Habit'),
@@ -307,8 +310,10 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
             ),
             const SizedBox(height: 12),
             HabitProgressIndicators(
-              streakLabel: _streakLabel(_habit, today),
-              goalLabel: _periodProgressLabel(context, _habit, today),
+              streakLabel: '$streak ${streak == 1 ? 'day' : 'days'}',
+              goalLabel: repeatLabel,
+              goalReached: quotaReached,
+              color: color,
             ),
             const SizedBox(height: 18),
             _CalendarCard(
@@ -1372,76 +1377,32 @@ class _CalendarCardState extends State<_CalendarCard> {
   }
 }
 
-String _periodProgressLabel(BuildContext context, Habit habit, DateTime day) {
-  final progress = habit.successfulDaysInPeriod(day, habit.goalPeriod);
-  final reached = habit.periodGoalReached(day);
-  return switch (habit.goalPeriod) {
-    GoalPeriod.none =>
-      habit.type == HabitType.quit
-          ? (habit.hasQuitLimit ? 'Days within the limit' : 'Slip-free days')
-          : habit.trackingMode == TrackingMode.yesNo
-          ? 'Done days are marked'
-          : habit.trackingMode == TrackingMode.count
-          ? 'Goal: ${habit.target}'
-          : 'Goal: ${habit.target} ${habit.unit}'.trim(),
-    GoalPeriod.daily => reached ? 'Daily goal reached' : 'Daily goal pending',
-    GoalPeriod.weekly =>
-      '${reached ? 'Goal reached · ' : ''}$progress / ${habit.weeklyGoalTarget} days this week',
-    GoalPeriod.monthly =>
-      '${reached ? 'Goal reached · ' : ''}$progress / ${habit.monthlyGoalTarget} days this month',
-    GoalPeriod.specificDays =>
-      habit.isCompleteOn(day)
-          ? 'Done today'
-          : habit.isScheduledOn(day)
-          ? 'Scheduled today'
-          : 'Free day',
-    GoalPeriod.everyFewDays => _rollingGoalLabel(context, habit, day),
-  };
-}
-
-String _rollingGoalLabel(BuildContext context, Habit habit, DateTime day) {
-  final due = habit.nextCheckInDue(day);
-  if (due == null || !due.isAfter(shiftHabitDay(day, 0))) return 'Check-in due';
-  final date = MaterialLocalizations.of(context).formatMediumDate(due);
-  return 'Next check-in · $date';
-}
-
-String _streakLabel(Habit habit, DateTime today) {
-  if (habit.type != HabitType.quit) {
-    final streak = habit.currentStreak(today);
-    final unit = switch (habit.goalPeriod) {
-      GoalPeriod.everyFewDays => 'check-in',
-      GoalPeriod.weekly when habit.countsPeriods => 'week',
-      GoalPeriod.monthly when habit.countsPeriods => 'month',
-      _ => 'day',
-    };
-    return '$streak $unit${streak == 1 ? '' : 's'}';
+(String, bool) _repeatProgress(Habit habit, DateTime today) {
+  switch (habit.goalPeriod) {
+    case GoalPeriod.none:
+      if (habit.type == HabitType.build) return ('No repeat goal', false);
+      return (
+        habit.hasQuitLimit ? 'Everyday' : 'Slip-free days',
+        false,
+      );
+    case GoalPeriod.daily:
+      return ('Every day', false);
+    case GoalPeriod.specificDays:
+      return (specificDaysLabel(habit.buildRepeat.weekdays), false);
+    case GoalPeriod.everyFewDays:
+      return ('Every ${habit.buildRepeat.gapDays} days', false);
+    case GoalPeriod.weekly:
+    case GoalPeriod.monthly:
+      final weekly = habit.goalPeriod == GoalPeriod.weekly;
+      final target = weekly ? habit.weeklyGoalTarget : habit.monthlyGoalTarget;
+      final unit = weekly ? 'week' : 'month';
+      final progress = habit.successfulDaysInPeriod(
+        today,
+        habit.goalPeriod,
+        today: today,
+      );
+      return ('$progress of $target this $unit', progress >= target);
   }
-
-  final todayKey = dayKey(today);
-  final missedDays =
-      habit.dailyCounts.entries
-          .where(
-            (entry) =>
-                !habit.meetsQuitLimit(entry.value) &&
-                entry.key.compareTo(todayKey) <= 0,
-          )
-          .map((entry) => entry.key)
-          .toList()
-        ..sort();
-  if (missedDays.isEmpty) {
-    return habit.hasQuitLimit ? 'No missed days' : 'No slips yet';
-  }
-
-  final parts = missedDays.last.split('-').map(int.parse).toList();
-  final lastMissedDay = DateTime.utc(parts[0], parts[1], parts[2]);
-  final streak =
-      DateTime.utc(
-        today.year,
-        today.month,
-        today.day,
-      ).difference(lastMissedDay).inDays;
-  return '$streak ${streak == 1 ? 'day' : 'days'}';
 }
 
 DateTime _addMonths(DateTime date, int months) {
