@@ -1195,6 +1195,17 @@ class _CalendarCardState extends State<_CalendarCard> {
               ),
             ],
           ),
+          if (widget.habit.type == HabitType.quit && widget.habit.hasQuitLimit)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'Amount / limit · Bar shows how much is left',
+                textAlign: TextAlign.center,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: AppColors.coolGrey),
+              ),
+            ),
           Row(
             children: [
               for (final label in weekdays)
@@ -1213,10 +1224,13 @@ class _CalendarCardState extends State<_CalendarCard> {
           const SizedBox(height: 8),
           LayoutBuilder(
             builder: (context, constraints) {
-              // Keep all six weeks visible, including the grid spacing.
-              final cellSize = (constraints.maxWidth - 3 * 6) / 7;
+              final cellWidth = (constraints.maxWidth - 3 * 6) / 7;
+              final cellHeight = cellWidth.clamp(
+                _CalendarDayCell.minHeight(MediaQuery.textScalerOf(context)),
+                double.infinity,
+              );
               return SizedBox(
-                height: cellSize * 6 + 5 * 5,
+                height: cellHeight * 6 + 5 * 5,
                 child: PageView.builder(
                   controller: _pageController,
                   onPageChanged: (page) {
@@ -1227,8 +1241,11 @@ class _CalendarCardState extends State<_CalendarCard> {
                     }
                   },
                   itemBuilder:
-                      (context, page) =>
-                          _buildMonthGrid(DateTime(page ~/ 12, page % 12 + 1)),
+                      (context, page) => _buildMonthGrid(
+                        DateTime(page ~/ 12, page % 12 + 1),
+                        cellHeight,
+                        localToday,
+                      ),
                 ),
               );
             },
@@ -1247,43 +1264,29 @@ class _CalendarCardState extends State<_CalendarCard> {
     );
   }
 
-  Widget _buildMonthGrid(DateTime month) {
+  Widget _buildMonthGrid(DateTime month, double cellHeight, DateTime today) {
     final firstDay = DateTime(month.year, month.month);
-    final localToday = DateUtils.dateOnly(DateTime.now());
     final gridStart = shiftHabitDay(firstDay, 1 - firstDay.weekday);
     final repeatMarks = widget.habit.repeatMarks(
       gridStart,
       shiftHabitDay(gridStart, 41),
-      today: localToday,
+      today: today,
     );
     return GridView.builder(
       padding: EdgeInsets.zero,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: 42,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 7,
         mainAxisSpacing: 5,
         crossAxisSpacing: 3,
+        mainAxisExtent: cellHeight,
       ),
       itemBuilder: (context, index) {
         final day = shiftHabitDay(gridStart, index);
-        final inMonth = day.month == month.month;
-        final isSelected = dayKey(day) == dayKey(widget.selectedDay);
-        final isToday = dayKey(day) == dayKey(localToday);
-        final isFuture = day.isAfter(localToday);
-        final value = widget.habit.countOn(day);
-        final complete = !isFuture && widget.habit.isCompleteOn(day);
-        final slip =
-            widget.habit.type == HabitType.quit &&
-            value > 0 &&
-            !widget.habit.meetsQuitLimit(value);
-        final partial =
-            value > 0 && !complete && widget.habit.type != HabitType.quit;
-        final hasNote = widget.noteDays.contains(dayKey(day));
-        final repeatMark = repeatMarks[dayKey(day)];
-        final accent = Color(widget.habit.colorValue);
-        final markColor = accent;
+        final key = dayKey(day);
+        final hasNote = widget.noteDays.contains(key);
         return InkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () => widget.onTrackDay(day),
@@ -1291,85 +1294,14 @@ class _CalendarCardState extends State<_CalendarCard> {
               hasNote || canCreateHabitNoteOn(day)
                   ? () => widget.onEditNoteForDay(day)
                   : null,
-          child: Container(
-            key: ValueKey('calendar-day-${dayKey(day)}'),
-            decoration: BoxDecoration(
-              color:
-                  isSelected
-                      ? accent.withValues(alpha: 0.18)
-                      : Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isSelected || isToday ? accent : Colors.transparent,
-              ),
-            ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        '${day.day}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color:
-                              inMonth
-                                  ? AppColors.offWhite
-                                  : AppColors.coolGrey.withValues(alpha: 0.45),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      if (inMonth &&
-                          !isFuture &&
-                          (complete ||
-                              partial ||
-                              slip ||
-                              hasNote ||
-                              repeatMark != null))
-                        Container(
-                          width: 5,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color:
-                                hasNote &&
-                                        !complete &&
-                                        !partial &&
-                                        !slip &&
-                                        repeatMark == null
-                                    ? AppColors.offWhite
-                                    : slip
-                                    ? AppColors.coolGrey
-                                    : partial
-                                    ? markColor.withValues(alpha: 0.55)
-                                    : repeatMark == RepeatMark.free
-                                    ? AppColors.coolGrey
-                                    : markColor,
-                            shape:
-                                repeatMark == RepeatMark.filled
-                                    ? BoxShape.rectangle
-                                    : BoxShape.circle,
-                          ),
-                        )
-                      else
-                        const SizedBox(height: 5),
-                    ],
-                  ),
-                ),
-                if (inMonth && hasNote)
-                  Positioned(
-                    top: 2,
-                    right: 2,
-                    child: Icon(
-                      Icons.notes_rounded,
-                      size: 12,
-                      color:
-                          isSelected
-                              ? accent
-                              : AppColors.offWhite.withValues(alpha: 0.75),
-                    ),
-                  ),
-              ],
-            ),
+          child: _CalendarDayCell(
+            day: day,
+            habit: widget.habit,
+            showDetails: day.month == month.month && !day.isAfter(today),
+            isSelected: key == dayKey(widget.selectedDay),
+            isToday: day == today,
+            hasNote: hasNote,
+            coveredByRepeat: repeatMarks[key] == RepeatMark.filled,
           ),
         );
       },
@@ -1377,14 +1309,203 @@ class _CalendarCardState extends State<_CalendarCard> {
   }
 }
 
+class _CalendarDayCell extends StatelessWidget {
+  const _CalendarDayCell({
+    required this.day,
+    required this.habit,
+    required this.showDetails,
+    required this.isSelected,
+    required this.isToday,
+    required this.hasNote,
+    required this.coveredByRepeat,
+  });
+
+  static const _dateSize = 12.0;
+  static const _detailSize = 10.0;
+  static const _lineHeight = 1.2;
+  static const _padding = EdgeInsets.symmetric(horizontal: 3, vertical: 4);
+  static const _borderWidth = 1.0;
+  static const _detailGap = 3.0;
+  static const _barRowHeight = 10.0;
+
+  static double minHeight(TextScaler scaler) =>
+      (scaler.scale(_dateSize) * _lineHeight).ceilToDouble() +
+      (scaler.scale(_detailSize) * _lineHeight).ceilToDouble() +
+      _padding.vertical +
+      _borderWidth * 2 +
+      _detailGap * 2 +
+      _barRowHeight;
+
+  final DateTime day;
+  final Habit habit;
+  final bool showDetails;
+  final bool isSelected;
+  final bool isToday;
+  final bool hasNote;
+  final bool coveredByRepeat;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Color(habit.colorValue);
+    final warning = Theme.of(context).colorScheme.error;
+    final isQuit = habit.type == HabitType.quit;
+    final amount = habit.countOn(day);
+    final threshold = habit.dailyTrackingThreshold;
+    final complete = showDetails && habit.isCompleteOn(day);
+    final slip = showDetails && isQuit && !habit.meetsQuitLimit(amount);
+    final numeric =
+        isQuit
+            ? habit.hasQuitLimit
+            : habit.trackingMode != TrackingMode.yesNo && threshold > 0;
+    final showRatio =
+        showDetails && numeric && (amount > 0 || complete || slip);
+    final showNote = showDetails && hasNote;
+    final showCovered = showDetails && coveredByRepeat;
+
+    final status = switch ((isQuit, complete, slip)) {
+      (true, _, true) when numeric && amount > threshold =>
+        'Daily limit exceeded',
+      (true, _, true) => numeric ? 'Daily limit reached' : 'Slip recorded',
+      (true, true, _) => numeric ? 'Below daily limit' : 'Slip-free',
+      (false, true, _) => numeric ? 'Daily goal reached' : 'Completed',
+      (false, false, _) when showRatio => 'In progress',
+      _ => showCovered ? 'Covered by Repeat' : null,
+    };
+    final unit = habit.unit.trim();
+    final details = [
+      MaterialLocalizations.of(context).formatFullDate(day),
+      if (showRatio)
+        '${_exactAmount(amount)} of ${_exactAmount(threshold)}'
+            '${unit.isEmpty ? '' : ' $unit'}',
+      if (status != null) status,
+      if (showNote) 'Has note',
+    ];
+
+    return Semantics(
+      label: details.join('. '),
+      excludeSemantics: true,
+      selected: isSelected,
+      child: Container(
+        key: ValueKey('calendar-day-${dayKey(day)}'),
+        padding: _padding,
+        decoration: BoxDecoration(
+          color:
+              isSelected || (complete && !isQuit)
+                  ? accent.withValues(alpha: 0.18)
+                  : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected || isToday ? accent : Colors.transparent,
+            width: _borderWidth,
+          ),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: _label(
+                    '${day.day}',
+                    _dateSize,
+                    showDetails ? AppColors.offWhite : AppColors.coolGrey,
+                  ),
+                ),
+                if (showNote)
+                  const Icon(
+                    Icons.notes_rounded,
+                    size: 9,
+                    color: AppColors.offWhite,
+                  ),
+              ],
+            ),
+            if (showRatio) ...[
+              const SizedBox(height: _detailGap),
+              _label(
+                '${_compactAmount(amount)}/${_compactAmount(threshold)}',
+                _detailSize,
+                slip ? warning : AppColors.offWhite,
+              ),
+              const SizedBox(height: _detailGap),
+              SizedBox(
+                height: _barRowHeight,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: LinearProgressIndicator(
+                        value: (isQuit
+                                ? 1 - amount / threshold
+                                : amount / threshold)
+                            .clamp(0, 1),
+                        minHeight: 3,
+                        borderRadius: BorderRadius.circular(2),
+                        backgroundColor: (slip ? warning : AppColors.offWhite)
+                            .withValues(alpha: slip ? 0.38 : 0.20),
+                        color: accent,
+                        trackGap: 0,
+                        stopIndicatorRadius: 0,
+                      ),
+                    ),
+                    if (slip) ...[
+                      const SizedBox(width: 2),
+                      Icon(
+                        Icons.close_rounded,
+                        size: _barRowHeight,
+                        color: warning,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ] else if (complete || slip) ...[
+              const SizedBox(height: _detailGap),
+              Icon(
+                slip ? Icons.close_rounded : Icons.check_rounded,
+                size: 14,
+                color: slip ? warning : accent,
+              ),
+            ] else if (showCovered) ...[
+              const SizedBox(height: _detailGap),
+              _label('Covered', _detailSize, AppColors.coolGrey),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Widget _label(String text, double size, Color color) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Text(
+      text,
+      maxLines: 1,
+      style: TextStyle(
+        fontSize: size,
+        height: _lineHeight,
+        fontWeight: FontWeight.w600,
+        color: color,
+      ),
+    ),
+  );
+
+  static String _exactAmount(double value) =>
+      value.toString().replaceFirst(RegExp(r'\.0$'), '');
+
+  static String _compactAmount(double value) {
+    if (value > 0 && value < 0.01) return value.toStringAsExponential(1);
+    final (scaled, decimals, suffix) = switch (value) {
+      >= 1000000 => (value / 1000000, 1, 'M'),
+      >= 1000 => (value / 1000, 1, 'k'),
+      _ => (value, 2, ''),
+    };
+    return '${scaled.toStringAsFixed(decimals).replaceFirst(RegExp(r'\.?0+$'), '')}$suffix';
+  }
+}
+
 (String, bool) _repeatProgress(Habit habit, DateTime today) {
   switch (habit.goalPeriod) {
     case GoalPeriod.none:
       if (habit.type == HabitType.build) return ('No repeat goal', false);
-      return (
-        habit.hasQuitLimit ? 'Everyday' : 'Slip-free days',
-        false,
-      );
+      return (habit.hasQuitLimit ? 'Everyday' : 'Slip-free days', false);
     case GoalPeriod.daily:
       return ('Every day', false);
     case GoalPeriod.specificDays:

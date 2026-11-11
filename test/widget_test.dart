@@ -448,7 +448,7 @@ void main() {
     );
     expect(
       (partial.decoration! as BoxDecoration).color,
-      const Color(0xFF4CAF50).withValues(alpha: 0.48),
+      const Color(0xFF4CAF50).withValues(alpha: 1 / 3),
     );
     expect((inactive.decoration! as BoxDecoration).color, AppColors.carbon);
   });
@@ -496,54 +496,213 @@ void main() {
     );
   });
 
-  testWidgets(
-    'quit-habit calendar marks slips grey and sober days in the habit colour',
-    (tester) async {
-      final today = DateTime.now();
-      final previousMonth = DateTime(today.year, today.month - 1);
-      final slipDay = DateTime(previousMonth.year, previousMonth.month, 2);
-      final soberDay = DateTime(previousMonth.year, previousMonth.month, 3);
-      final habit = Habit(
-        id: 'quit-soda',
-        name: 'Quit soda',
-        type: HabitType.quit,
-        colorValue: AppColors.burntOrange.toARGB32(),
-        startDate: today,
-        dailyCounts: {dayKey(slipDay): 1, dayKey(soberDay): 0},
-      );
+  testWidgets('quit-habit calendar distinguishes slips from slip-free days', (
+    tester,
+  ) async {
+    final today = DateTime.now();
+    final previousMonth = DateTime(today.year, today.month - 1);
+    final slipDay = DateTime(previousMonth.year, previousMonth.month, 2);
+    final soberDay = DateTime(previousMonth.year, previousMonth.month, 3);
+    final habit = Habit(
+      id: 'quit-soda',
+      name: 'Quit soda',
+      type: HabitType.quit,
+      colorValue: AppColors.burntOrange.toARGB32(),
+      startDate: today,
+      dailyCounts: {dayKey(slipDay): 1, dayKey(soberDay): 0},
+    );
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: HabitDetailScreen(
-            habit: habit,
-            repository: _MemoryHabitRepository(),
-            onEdit: () async => null,
-            onTrackDay: (_) async => null,
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: _MemoryHabitRepository(),
+          onEdit: () async => null,
+          onTrackDay: (_) async => null,
         ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+
+    Finder marker(DateTime day, IconData icon) => find.descendant(
+      of: find.byKey(ValueKey('calendar-day-${dayKey(day)}')),
+      matching: find.byIcon(icon),
+    );
+
+    expect(marker(slipDay, Icons.close_rounded), findsOneWidget);
+    expect(
+      tester.widget<Icon>(marker(soberDay, Icons.check_rounded)).color,
+      AppColors.burntOrange,
+    );
+  });
+
+  testWidgets('calendar shows build ratios and updates them after tracking', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final today = DateTime.now();
+    final month = DateTime(today.year, today.month - 1);
+    final partialDay = DateTime(month.year, month.month, 2);
+    final completeDay = shiftHabitDay(partialDay, 1);
+    final emptyDay = shiftHabitDay(completeDay, 1);
+    final freeDay = shiftHabitDay(
+      month,
+      7 + (DateTime.saturday - month.weekday) % 7,
+    );
+    final adjacentDay = DateTime(today.year, today.month);
+    final futureDay = DateTime(today.year, today.month + 1, 2);
+    var habit = Habit(
+      id: 'walk',
+      name: 'Walk',
+      target: 5.5,
+      trackingMode: TrackingMode.measure,
+      unit: 'km',
+      goalPeriod: GoalPeriod.specificDays,
+      startDate: month,
+      dailyCounts: {
+        dayKey(partialDay): 2.25,
+        dayKey(completeDay): 12500,
+        dayKey(adjacentDay): 5.5,
+        dayKey(futureDay): 5.5,
+      },
+    );
+    final repository =
+        _MemoryHabitRepository()
+          ..notes[dayKey(partialDay)] = 'Walked before breakfast';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder:
+            (context, child) => MediaQuery.withClampedTextScaling(
+              minScaleFactor: 1.5,
+              child: child!,
+            ),
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: repository,
+          onEdit: () async => null,
+          onTrackDay: (day) async => habit = habit.setCount(day, 5.5),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+
+    Finder cell(DateTime day) =>
+        find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
+    Finder inCell(DateTime day, Finder matching) =>
+        find.descendant(of: cell(day), matching: matching);
+    Finder bar(DateTime day) =>
+        inCell(day, find.byType(LinearProgressIndicator));
+
+    expect(inCell(partialDay, find.text('2.25/5.5')), findsOneWidget);
+    expect(
+      inCell(partialDay, find.byIcon(Icons.notes_rounded)),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget<LinearProgressIndicator>(bar(partialDay)).value,
+      closeTo(2.25 / 5.5, 0.001),
+    );
+    expect(inCell(completeDay, find.text('12.5k/5.5')), findsOneWidget);
+    expect(tester.widget<LinearProgressIndicator>(bar(completeDay)).value, 1);
+    expect(
+      find.bySemanticsLabel(RegExp('12500 of 5.5 km.*Daily goal reached')),
+      findsOneWidget,
+    );
+    expect(bar(emptyDay), findsNothing);
+    expect(bar(adjacentDay), findsNothing);
+    expect(bar(freeDay), findsNothing);
+    expect(inCell(freeDay, find.byType(Text)), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp('Free day')), findsNothing);
+
+    final lastDay = shiftHabitDay(month, 42 - month.weekday);
+    expect(
+      tester.getRect(cell(lastDay)).bottom,
+      closeTo(tester.getRect(find.byType(PageView)).bottom, 0.01),
+    );
+    await tester.tap(cell(partialDay));
+    await tester.pumpAndSettle();
+    expect(inCell(partialDay, find.text('5.5/5.5')), findsOneWidget);
+    expect(tester.widget<LinearProgressIndicator>(bar(partialDay)).value, 1);
+
+    for (var i = 0; i < 2; i++) {
+      await tester.tap(find.byTooltip('Next month'));
+      await tester.pumpAndSettle();
+    }
+    expect(cell(futureDay), findsOneWidget);
+    expect(bar(futureDay), findsNothing);
+  });
+
+  testWidgets('quit calendar bars show the remaining daily allowance', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    final month = DateTime(now.year, now.month - 1);
+    final start = DateTime(month.year, month.month, 2);
+    final habit = Habit(
+      id: 'soda',
+      name: 'Limit soda',
+      type: HabitType.quit,
+      quitLimit: 5,
+      startDate: start,
+      dailyCounts: {
+        dayKey(shiftHabitDay(start, 1)): 2,
+        dayKey(shiftHabitDay(start, 2)): 5,
+        dayKey(shiftHabitDay(start, 3)): 7,
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HabitDetailScreen(
+          habit: habit,
+          repository: _MemoryHabitRepository(),
+          onEdit: () async => null,
+          onTrackDay: (_) async => null,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Amount / limit · Bar shows how much is left'),
+      findsOneWidget,
+    );
+    for (final (offset, label, remaining) in [
+      (0, '0/5', 1.0),
+      (1, '2/5', 0.6),
+      (2, '5/5', 0.0),
+      (3, '7/5', 0.0),
+    ]) {
+      final day = shiftHabitDay(start, offset);
+      final cell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
+      expect(
+        find.descendant(of: cell, matching: find.text(label)),
+        findsOneWidget,
       );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Previous month'));
-      await tester.pumpAndSettle();
-
-      Color markerColor(DateTime day) {
-        final cell = find.byKey(ValueKey('calendar-day-${dayKey(day)}'));
-        final marker = tester
-            .widgetList<Container>(
-              find.descendant(of: cell, matching: find.byType(Container)),
-            )
-            .firstWhere(
-              (container) =>
-                  (container.decoration as BoxDecoration?)?.shape ==
-                  BoxShape.circle,
-            );
-        return (marker.decoration! as BoxDecoration).color!;
-      }
-
-      expect(markerColor(slipDay), AppColors.coolGrey);
-      expect(markerColor(soberDay), AppColors.burntOrange);
-    },
-  );
+      final bar = find.descendant(
+        of: cell,
+        matching: find.byType(LinearProgressIndicator),
+      );
+      expect(
+        tester.widget<LinearProgressIndicator>(bar).value,
+        closeTo(remaining, 0.001),
+      );
+      expect(
+        find.descendant(
+          of: cell,
+          matching: find.byIcon(Icons.close_rounded),
+        ),
+        offset >= 2 ? findsOneWidget : findsNothing,
+      );
+    }
+  });
 
   testWidgets('calendar swipes keep the header fixed and navigation in sync', (
     tester,
@@ -1269,6 +1428,7 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(buttonFill()!.a, closeTo(0.68, 0.001));
+    expect(heatmapColor()!.a, closeTo(0.6, 0.001));
     for (var i = 0; i < 2; i++) {
       await tester.tap(track);
     }
@@ -1276,9 +1436,15 @@ void main() {
     expect(input, findsNothing);
     expect(repository.habits.single.countOn(today), 4);
     expect(repository.habits.single.isCompleteOn(today), isTrue);
-    expect(heatmapColor(), AppColors.burntOrange);
+    expect(heatmapColor()!.a, closeTo(0.2, 0.001));
     expect(buttonFill()!.a, closeTo(0.36, 0.001));
     expect(checkColor(), AppColors.burntOrange);
+
+    await tester.tap(find.text('Limit soda'));
+    await tester.pumpAndSettle();
+    expect(heatmapColor()!.a, closeTo(0.2, 0.001));
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
 
     repository.saveDelay = const Duration(milliseconds: 20);
     await tester.tap(track);
@@ -1754,13 +1920,9 @@ void main() {
       expect(find.text('Every 5 days'), findsOneWidget);
       expect(heatmapDecoration().color, color.withValues(alpha: 0.18));
       final calendarDay = find.byKey(ValueKey('calendar-day-${dayKey(today)}'));
-      final children = find.descendant(
-        of: calendarDay,
-        matching: find.byType(Container),
-      );
       expect(
-        tester.widgetList<Container>(children).map((cell) => cell.decoration),
-        contains(const BoxDecoration(color: AppColors.burntOrange)),
+        find.descendant(of: calendarDay, matching: find.text('Covered')),
+        findsOneWidget,
       );
       expect(
         find.descendant(
@@ -1779,6 +1941,13 @@ void main() {
       await tester.tap(find.text('Stretch'));
       await tester.pumpAndSettle();
       expect(find.text('1 day'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: calendarDay,
+          matching: find.byIcon(Icons.check_rounded),
+        ),
+        findsOneWidget,
+      );
     },
   );
 
