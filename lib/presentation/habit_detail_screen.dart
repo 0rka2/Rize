@@ -7,8 +7,8 @@ import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'habit_heatmap.dart';
 import 'habit_icons.dart';
+import 'habit_note_editor.dart';
 import 'repeat_picker_screen.dart' show specificDaysLabel;
-import 'unsaved_changes.dart';
 
 class HabitDetailScreen extends StatefulWidget {
   const HabitDetailScreen({
@@ -76,13 +76,10 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   Future<void> _addNote() =>
       _editNoteForDay(DateTime.now(), allowDateChange: true);
 
-  Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
-    if (isSlip ? _habit.countOn(day) > 0 : _habit.isSlipFreeOn(day)) return;
-    final updated =
-        widget.onSetSlipDay == null
-            ? await widget.onTrackDay(day)
-            : await widget.onSetSlipDay!(day, isSlip);
+  Future<Habit?> _setSlipForDay(DateTime day, bool isSlip) async {
+    final updated = await widget.onSetSlipDay?.call(day, isSlip);
     if (updated != null && mounted) setState(() => _habit = updated);
+    return updated;
   }
 
   Future<void> _editNoteForDay(
@@ -91,14 +88,14 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   }) async {
     final key = dayKey(day);
     if (!_notes.containsKey(key) && !canCreateHabitNoteOn(day)) return;
-    final savedNote = await _showNoteEditor(
+    final savedNote = await showHabitNoteEditor(
       context,
       day: day,
       habit: _habit,
       notes: _notes,
       repository: widget.repository,
       allowDateChange: allowDateChange,
-      onSetSlip: _setSlipForDay,
+      onSetSlip: widget.onSetSlipDay == null ? null : _setSlipForDay,
     );
     if (savedNote == null || !mounted) return;
 
@@ -124,16 +121,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               habit: _habit,
               repository: widget.repository,
               initialNotes: _notes,
-              onSetSlipDay: (day, isSlip) async {
-                final updated =
-                    widget.onSetSlipDay == null
-                        ? await widget.onTrackDay(day)
-                        : await widget.onSetSlipDay!(day, isSlip);
-                if (updated != null && mounted) {
-                  setState(() => _habit = updated);
-                }
-                return updated;
-              },
+              onSetSlipDay: widget.onSetSlipDay == null ? null : _setSlipForDay,
               onNotesChanged: (notes) {
                 if (!mounted) return;
                 setState(() {
@@ -237,7 +225,9 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     }
 
     final updated = await widget.onTrackDay(day);
-    if (updated != null && mounted) setState(() => _habit = updated);
+    if (!mounted) return;
+    if (updated != null) setState(() => _habit = updated);
+    if (_habit.type == HabitType.quit) await _loadNotes();
   }
 
   @override
@@ -461,276 +451,6 @@ class _EmptyNotes extends StatelessWidget {
   }
 }
 
-typedef _SavedNote = ({DateTime day, String content});
-
-Future<_SavedNote?> _showNoteEditor(
-  BuildContext context, {
-  required DateTime day,
-  required Habit habit,
-  required Map<String, String> notes,
-  required HabitRepository repository,
-  required bool allowDateChange,
-  required Future<void> Function(DateTime, bool) onSetSlip,
-}) => showModalBottomSheet<_SavedNote>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  enableDrag: false,
-  builder:
-      (_) => _NoteEditor(
-        day: DateUtils.dateOnly(day),
-        habit: habit,
-        notes: notes,
-        repository: repository,
-        allowDateChange: allowDateChange,
-        onSetSlip: onSetSlip,
-      ),
-);
-
-class _NoteEditor extends StatefulWidget {
-  const _NoteEditor({
-    required this.day,
-    required this.habit,
-    required this.notes,
-    required this.repository,
-    required this.allowDateChange,
-    required this.onSetSlip,
-  });
-
-  final DateTime day;
-  final Habit habit;
-  final Map<String, String> notes;
-  final HabitRepository repository;
-  final bool allowDateChange;
-  final Future<void> Function(DateTime, bool) onSetSlip;
-
-  @override
-  State<_NoteEditor> createState() => _NoteEditorState();
-}
-
-class _NoteEditorState extends State<_NoteEditor> {
-  late final TextEditingController _controller;
-  late DateTime _day;
-  bool _choosingDate = false;
-  bool _saving = false;
-  String? _error;
-
-  String? get _existingNote => widget.notes[dayKey(_day)];
-
-  @override
-  void initState() {
-    super.initState();
-    _day = widget.day;
-    _controller = TextEditingController(text: _existingNote);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  bool get _hasUnsavedChanges =>
-      _controller.text.trim() != (_existingNote ?? '');
-
-  void _selectDate(DateTime day) {
-    setState(() {
-      final selectedNote = widget.notes[dayKey(day)];
-      if (!DateUtils.isSameDay(day, _day) &&
-          (selectedNote != null || _existingNote != null)) {
-        _controller.text = selectedNote ?? '';
-      }
-      _day = day;
-      _choosingDate = false;
-      _error = null;
-    });
-  }
-
-  Future<void> _save() async {
-    if (_saving) return;
-    if (_existingNote == null && !canCreateHabitNoteOn(_day)) {
-      setState(() => _error = 'New notes cannot be added for future dates.');
-      return;
-    }
-    final content = _controller.text.trim();
-    if (_existingNote == null && content.isEmpty) {
-      setState(() => _error = 'Write a note before saving.');
-      return;
-    }
-
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      await widget.repository.saveNote(widget.habit.id, _day, content);
-      if (mounted) Navigator.pop(context, (day: _day, content: content));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = 'Your note could not be saved. Please try again.';
-      });
-    }
-  }
-
-  Future<void> _setSlip(bool isSlip) async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    try {
-      await widget.onSetSlip(_day, isSlip);
-      if (mounted) {
-        setState(() => _saving = false);
-        await Navigator.maybePop(context);
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final habit = widget.habit;
-    final dateLabel = MaterialLocalizations.of(context).formatMediumDate(_day);
-    final field = TextField(
-      controller: _controller,
-      readOnly: _saving,
-      minLines: 3,
-      maxLines: 6,
-      maxLength: 500,
-      textCapitalization: TextCapitalization.sentences,
-      decoration: const InputDecoration(
-        hintText: 'What went well? What got in the way?',
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.all(Radius.circular(16)),
-        ),
-      ),
-    );
-    final saveButton = FilledButton(
-      onPressed: _saving ? null : _save,
-      child: Text(_saving ? 'Saving…' : 'Save'),
-    );
-    final error = _error;
-    final errorText =
-        error == null
-            ? null
-            : Text(error, style: const TextStyle(color: AppColors.burntOrange));
-
-    final color = Color(habit.colorValue);
-    final isSlip = habit.countOn(_day) > 0;
-    final isSober = habit.isSlipFreeOn(_day);
-    return UnsavedChangesGuard(
-      color: color,
-      hasUnsavedChanges: () => _hasUnsavedChanges,
-      isSaving: () => _saving,
-      onSave: _save,
-      child: Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-            child:
-                _choosingDate
-                    ? Column(
-                      children: [
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: IconButton(
-                            tooltip: 'Back to note',
-                            onPressed:
-                                () => setState(() => _choosingDate = false),
-                            icon: const Icon(Icons.arrow_back_rounded),
-                          ),
-                        ),
-                        _NoteCalendar(
-                          initialDate: _day,
-                          onDateChanged: _selectDate,
-                        ),
-                      ],
-                    )
-                    : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: CircleAvatar(
-                            backgroundColor: color.withValues(alpha: 0.14),
-                            foregroundColor: color,
-                            child: Icon(habitIcon(habit.icon)),
-                          ),
-                          title: Text(habit.name),
-                          subtitle: Text(
-                            DateUtils.isSameDay(_day, DateTime.now())
-                                ? 'Today'
-                                : dateLabel,
-                          ),
-                          trailing: IconButton(
-                            tooltip: 'Close note editor',
-                            onPressed:
-                                _saving
-                                    ? null
-                                    : () => Navigator.maybePop(context),
-                            icon: const Icon(Icons.close_rounded),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        field,
-                        if (errorText != null) errorText,
-                        Row(
-                          children: [
-                            if (widget.allowDateChange) ...[
-                              IconButton.filledTonal(
-                                tooltip: 'Choose note date',
-                                onPressed:
-                                    _saving
-                                        ? null
-                                        : () {
-                                          FocusScope.of(context).unfocus();
-                                          setState(() => _choosingDate = true);
-                                        },
-                                icon: const Icon(Icons.calendar_today_rounded),
-                              ),
-                              const SizedBox(width: 12),
-                            ],
-                            Expanded(child: saveButton),
-                          ],
-                        ),
-                        if (habit.type == HabitType.quit &&
-                            _existingNote != null)
-                          Wrap(
-                            children: [
-                              TextButton(
-                                onPressed:
-                                    _saving || isSlip
-                                        ? null
-                                        : () => _setSlip(true),
-                                child: Text(
-                                  isSlip ? 'Marked as slip' : 'Mark as slip',
-                                ),
-                              ),
-                              TextButton(
-                                onPressed:
-                                    _saving || isSober
-                                        ? null
-                                        : () => _setSlip(false),
-                                child: Text(
-                                  isSober ? 'Marked as sober' : 'Mark as sober',
-                                ),
-                              ),
-                            ],
-                          ),
-                      ],
-                    ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class HabitNotesScreen extends StatefulWidget {
   const HabitNotesScreen({
     required this.habit,
@@ -744,7 +464,7 @@ class HabitNotesScreen extends StatefulWidget {
   final Habit habit;
   final HabitRepository repository;
   final Map<String, String> initialNotes;
-  final Future<Habit?> Function(DateTime day, bool isSlip) onSetSlipDay;
+  final Future<Habit?> Function(DateTime day, bool isSlip)? onSetSlipDay;
   final ValueChanged<Map<String, String>> onNotesChanged;
 
   @override
@@ -791,14 +511,14 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
   }
 
   Future<void> _editNote(DateTime day, {bool allowDateChange = false}) async {
-    final savedNote = await _showNoteEditor(
+    final savedNote = await showHabitNoteEditor(
       context,
       day: day,
       habit: _habit,
       notes: _notes,
       repository: widget.repository,
       allowDateChange: allowDateChange,
-      onSetSlip: _setSlipForDay,
+      onSetSlip: widget.onSetSlipDay == null ? null : _setSlipForDay,
     );
     if (savedNote == null || !mounted) return;
 
@@ -816,10 +536,10 @@ class _HabitNotesScreenState extends State<HabitNotesScreen> {
 
   Future<void> _addNote() => _editNote(DateTime.now(), allowDateChange: true);
 
-  Future<void> _setSlipForDay(DateTime day, bool isSlip) async {
-    if (isSlip ? _habit.countOn(day) > 0 : _habit.isSlipFreeOn(day)) return;
-    final updated = await widget.onSetSlipDay(day, isSlip);
+  Future<Habit?> _setSlipForDay(DateTime day, bool isSlip) async {
+    final updated = await widget.onSetSlipDay?.call(day, isSlip);
     if (updated != null && mounted) setState(() => _habit = updated);
+    return updated;
   }
 
   String _dateLabel(String key) {
@@ -998,26 +718,6 @@ class _NotePreviewCard extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _NoteCalendar extends StatelessWidget {
-  const _NoteCalendar({required this.initialDate, required this.onDateChanged});
-
-  final DateTime initialDate;
-  final ValueChanged<DateTime> onDateChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final firstDate = DateTime(1900);
-    final today = DateUtils.dateOnly(DateTime.now());
-    final day = DateUtils.dateOnly(initialDate);
-    return CalendarDatePicker(
-      initialDate: day.isBefore(firstDate) || day.isAfter(today) ? today : day,
-      firstDate: firstDate,
-      lastDate: today,
-      onDateChanged: onDateChanged,
     );
   }
 }
@@ -1352,7 +1052,7 @@ class _CalendarDayCell extends StatelessWidget {
     final amount = habit.countOn(day);
     final threshold = habit.dailyTrackingThreshold;
     final complete = showDetails && habit.isCompleteOn(day);
-    final slip = showDetails && isQuit && !habit.meetsQuitLimit(amount);
+    final slip = showDetails && habit.isQuitSlipOn(day);
     final numeric =
         isQuit
             ? habit.hasQuitLimit
@@ -1363,6 +1063,7 @@ class _CalendarDayCell extends StatelessWidget {
     final showCovered = showDetails && coveredByRepeat;
 
     final status = switch ((isQuit, complete, slip)) {
+      (true, _, true) when habit.hasNoteSlipOn(day) => 'Slip recorded',
       (true, _, true) when numeric && amount > threshold =>
         'Daily limit exceeded',
       (true, _, true) => numeric ? 'Daily limit reached' : 'Slip recorded',
@@ -1432,10 +1133,13 @@ class _CalendarDayCell extends StatelessWidget {
                   children: [
                     Expanded(
                       child: LinearProgressIndicator(
-                        value: (isQuit
-                                ? 1 - amount / threshold
-                                : amount / threshold)
-                            .clamp(0, 1),
+                        value:
+                            slip
+                                ? 0
+                                : (isQuit
+                                        ? 1 - amount / threshold
+                                        : amount / threshold)
+                                    .clamp(0, 1),
                         minHeight: 3,
                         borderRadius: BorderRadius.circular(2),
                         backgroundColor: (slip ? warning : AppColors.offWhite)

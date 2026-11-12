@@ -7,12 +7,14 @@ import 'package:rize/main.dart';
 import 'package:rize/presentation/habit_heatmap.dart';
 import 'package:rize/presentation/habit_detail_screen.dart';
 import 'package:rize/presentation/home_screen.dart';
+import 'package:rize/presentation/today_timeline.dart';
 import 'package:rize/theme/app_colors.dart';
 
 class _MemoryHabitRepository extends HabitRepository {
   List<Habit> habits = [];
   final Map<String, String> notes = {};
   bool failSavingNotes = false;
+  bool failSavingHabits = false;
   Duration saveDelay = Duration.zero;
 
   @override
@@ -21,6 +23,7 @@ class _MemoryHabitRepository extends HabitRepository {
   @override
   Future<void> saveHabits(List<Habit> habits) async {
     if (saveDelay != Duration.zero) await Future<void>.delayed(saveDelay);
+    if (failSavingHabits) throw StateError('Unable to save habits');
     this.habits = habits;
   }
 
@@ -37,6 +40,35 @@ class _MemoryHabitRepository extends HabitRepository {
       notes[key] = content;
     }
   }
+}
+
+Finder _timelineDate(DateTime day) =>
+    find.byKey(ValueKey('today-date-${dayKey(day)}'));
+
+double? _timelineProgress(WidgetTester tester, DateTime day) =>
+    tester
+        .widget<CircularProgressIndicator>(
+          find.descendant(
+            of: _timelineDate(day),
+            matching: find.byType(CircularProgressIndicator),
+          ),
+        )
+        .value;
+
+Future<void> _selectEarlierTimelineDate(
+  WidgetTester tester,
+  DateTime day,
+) async {
+  final date = _timelineDate(day).hitTestable();
+  for (var swipes = 0; swipes < 4 && date.evaluate().isEmpty; swipes++) {
+    await tester.drag(
+      find.byKey(const Key('today-week-timeline')),
+      const Offset(650, 0),
+    );
+    await tester.pumpAndSettle();
+  }
+  await tester.tap(date);
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -478,18 +510,24 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('home habit cards show an unlabeled 180-day heatmap', (
+  testWidgets('Today cards wrap measured progress and show the daily bar', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(320, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final today = DateTime.now();
     final habit = Habit(
-      id: 'read',
-      name: 'Read',
+      id: 'water',
+      name: 'Drink water',
       colorValue: 0xFF4CAF50,
-      target: 3,
+      trackingMode: TrackingMode.measure,
+      target: 1000,
+      unit: 'millilitres',
       dailyCounts: {
-        dayKey(today.subtract(const Duration(days: 1))): 3,
-        dayKey(today.subtract(const Duration(days: 2))): 1,
+        dayKey(today): 300.5,
+        dayKey(shiftHabitDay(today, -1)): 1000,
       },
     );
     final repository = _MemoryHabitRepository()..habits = [habit];
@@ -499,47 +537,283 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final cellFinder = find.byWidgetPredicate((widget) {
-      final key = widget.key;
-      return widget is Container &&
-          key is ValueKey<String> &&
-          key.value.startsWith('habit-heatmap-');
-    });
-    expect(cellFinder, findsNWidgets(180));
-    expect(find.text('Mo'), findsNothing);
-    expect(find.text('Jan'), findsNothing);
-
-    final completed = tester.widget<Container>(
-      find.byKey(
-        ValueKey(
-          'habit-heatmap-${dayKey(today.subtract(const Duration(days: 1)))}',
-        ),
-      ),
-    );
-    final partial = tester.widget<Container>(
-      find.byKey(
-        ValueKey(
-          'habit-heatmap-${dayKey(today.subtract(const Duration(days: 2)))}',
-        ),
-      ),
-    );
-    final inactive = tester.widget<Container>(
-      find.byKey(
-        ValueKey(
-          'habit-heatmap-${dayKey(today.subtract(const Duration(days: 3)))}',
-        ),
-      ),
+    final subtitle = find.text('300.5 / 1000 millilitres today');
+    final name = find.text('Drink water');
+    expect(subtitle, findsOneWidget);
+    expect(
+      tester.getTopLeft(subtitle).dy,
+      greaterThan(tester.getBottomLeft(name).dy),
     );
     expect(
-      (completed.decoration! as BoxDecoration).color,
-      const Color(0xFF4CAF50),
+      tester.getSize(subtitle).height,
+      greaterThan(tester.getSize(name).height),
     );
-    expect(
-      (partial.decoration! as BoxDecoration).color,
-      const Color(0xFF4CAF50).withValues(alpha: 1 / 3),
+    expect(find.byType(HabitHeatmap), findsNothing);
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
     );
-    expect((inactive.decoration! as BoxDecoration).color, AppColors.carbon);
+    expect(bar.value, closeTo(0.3005, 0.0001));
+    expect(bar.color, Color(habit.colorValue));
+    expect(tester.takeException(), isNull);
   });
+
+  testWidgets('Today header fits seven dates and only offers Show all', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 600);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final today = DateTime(2027, 1, 7);
+    var selectedDay = today;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: StatefulBuilder(
+              builder:
+                  (context, setState) => TodayTimeline(
+                    today: today,
+                    selectedDay: selectedDay,
+                    completionForDay: (day) => (completed: 2, active: 3),
+                    onSelectDay: (day) => setState(() => selectedDay = day),
+                    onAddHabit: () {},
+                  ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.getCenter(find.text('Today')).dx, closeTo(160, 1));
+    expect(find.text('January 2027'), findsOneWidget);
+    expect(find.byTooltip('Add habit'), findsOneWidget);
+    for (var day = 4; day <= 10; day++) {
+      final bounds = tester.getRect(_timelineDate(DateTime(2027, 1, day)));
+      expect(bounds.left, greaterThanOrEqualTo(20));
+      expect(bounds.right, lessThanOrEqualTo(300));
+    }
+    expect(_timelineProgress(tester, today), closeTo(2 / 3, 0.001));
+    expect(
+      find.byTooltip(
+        'Thursday, January 7, 2027 · 67% complete (2 of 3 habits)',
+      ),
+      findsOneWidget,
+    );
+
+    final tomorrow = shiftHabitDay(today, 1);
+    final yesterday = shiftHabitDay(today, -1);
+    expect(_timelineProgress(tester, yesterday), closeTo(2 / 3, 0.001));
+    for (final offset in [1, 2, 3]) {
+      expect(
+        find.descendant(
+          of: _timelineDate(shiftHabitDay(today, offset)),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+    }
+    expect(
+      tester.widget<Semantics>(_timelineDate(tomorrow)).properties.enabled,
+      isFalse,
+    );
+    await tester.tap(_timelineDate(tomorrow), warnIfMissed: false);
+    expect(selectedDay, today);
+
+    await tester.tap(find.text('All'));
+    await tester.pumpAndSettle();
+    final menu = find.byType(CheckedPopupMenuItem<String>);
+    expect(menu, findsOneWidget);
+    expect(tester.widget<CheckedPopupMenuItem<String>>(menu).checked, isTrue);
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(find.text('Show all'), findsNothing);
+    expect(selectedDay, today);
+
+    final timeline = find.byKey(const Key('today-week-timeline'));
+    await tester.drag(timeline, const Offset(235, 0));
+    await tester.pumpAndSettle();
+    final newYearRange = find.text('Dec 28, 2026 – Jan 3, 2027');
+    expect(find.text('December – January'), findsNothing);
+    expect(newYearRange, findsOneWidget);
+    expect(selectedDay, today);
+
+    final pastDay = DateTime(2027, 1, 2);
+    await tester.tap(_timelineDate(pastDay));
+    await tester.pumpAndSettle();
+    expect(selectedDay, pastDay);
+    expect(newYearRange, findsOneWidget);
+    expect(_timelineProgress(tester, pastDay), closeTo(2 / 3, 0.001));
+
+    await tester.drag(timeline, const Offset(235, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('December'), findsOneWidget);
+    final pastRange = find.text('21 – 27, 2026');
+    expect(pastRange, findsOneWidget);
+    expect(selectedDay, pastDay);
+
+    for (var week = 0; week < 3; week++) {
+      await tester.drag(timeline, const Offset(235, 0));
+      await tester.pumpAndSettle();
+    }
+    final crossMonthRange = find.text('Nov 30 – Dec 6');
+    expect(crossMonthRange, findsOneWidget);
+    expect(find.text('2026'), findsOneWidget);
+
+    await tester.tap(crossMonthRange);
+    await tester.pumpAndSettle();
+    expect(find.text('January 2027'), findsOneWidget);
+    expect(selectedDay, today);
+    expect(_timelineDate(today).hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Today timeline updates historical progress and applies the edit window',
+    (tester) async {
+      final today = DateUtils.dateOnly(DateTime.now());
+      final editable = shiftHabitDay(today, -7);
+      final readOnly = shiftHabitDay(today, -8);
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [
+              Habit(
+                id: 'read',
+                name: 'Read',
+                target: 2,
+                startDate: readOnly,
+                dailyCounts: {dayKey(editable): 2, dayKey(readOnly): 1},
+              ),
+              Habit(
+                id: 'water',
+                name: 'Drink water',
+                target: 2,
+                startDate: readOnly,
+                dailyCounts: {dayKey(editable): 1, dayKey(today): 2},
+              ),
+              Habit(
+                id: 'soda',
+                name: 'Limit soda',
+                type: HabitType.quit,
+                quitLimit: 3,
+                startDate: readOnly,
+                noteSlipDays: {dayKey(editable)},
+              ),
+              Habit(id: 'walk', name: 'Walk', startDate: today),
+            ];
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      expect(_timelineProgress(tester, today), 0.5);
+      expect(find.text('Walk'), findsOneWidget);
+      await _selectEarlierTimelineDate(tester, editable);
+      expect(find.text('Walk'), findsNothing);
+      expect(find.text('Slip recorded · 0 / 3 times'), findsOneWidget);
+      expect(_timelineProgress(tester, editable), closeTo(1 / 3, 0.001));
+      final neighboringDay = shiftHabitDay(
+        editable,
+        editable.weekday == DateTime.sunday ? -1 : 1,
+      );
+      expect(_timelineProgress(tester, neighboringDay), closeTo(1 / 3, 0.001));
+      final waterCard =
+          find
+              .ancestor(
+                of: find.text('Drink water'),
+                matching: find.byType(InkWell),
+              )
+              .first;
+      await tester.tap(
+        find.descendant(
+          of: waterCard,
+          matching: find.byTooltip('Track this date'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(repository.habits[1].countOn(editable), 2);
+      expect(repository.habits[1].countOn(today), 2);
+      expect(_timelineProgress(tester, editable), closeTo(2 / 3, 0.001));
+      expect(_timelineProgress(tester, neighboringDay), closeTo(1 / 3, 0.001));
+
+      await _selectEarlierTimelineDate(tester, readOnly);
+      expect(
+        find.text('Read-only · Tracking is available for the past 7 days.'),
+        findsOneWidget,
+      );
+      final disabled = find.byWidgetPredicate(
+        (widget) =>
+            widget is IconButton &&
+            widget.tooltip == 'Tracking unavailable for this date',
+      );
+      expect(disabled, findsNWidgets(3));
+      expect(
+        tester
+            .widgetList<IconButton>(disabled)
+            .every((button) => button.onPressed == null),
+        isTrue,
+      );
+      await tester.tap(disabled.first, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(repository.habits.first.countOn(readOnly), 1);
+      expect(_timelineProgress(tester, readOnly), closeTo(1 / 3, 0.001));
+
+      await tester.tap(find.byTooltip('Back to today'));
+      await tester.pumpAndSettle();
+      expect(_timelineDate(today).hitTestable(), findsOneWidget);
+      expect(_timelineProgress(tester, today), 0.5);
+      expect(find.text('Walk'), findsOneWidget);
+      expect(disabled, findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Today timeline preserves older records and handles an empty day',
+    (tester) async {
+      final today = DateUtils.dateOnly(DateTime.now());
+      final history = shiftHabitDay(today, -3);
+      final emptyDay = shiftHabitDay(today, -10);
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [
+              Habit(
+                id: 'legacy',
+                name: 'Legacy build',
+                dailyCounts: {dayKey(shiftHabitDay(history, -1)): 1},
+              ),
+              Habit(
+                id: 'slip',
+                name: 'Recorded slip',
+                type: HabitType.quit,
+                trackingMode: TrackingMode.yesNo,
+                startDate: today,
+                noteSlipDays: {dayKey(history)},
+              ),
+              const Habit(id: 'unknown', name: 'No history yet'),
+            ];
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      await _selectEarlierTimelineDate(tester, history);
+      expect(find.text('Legacy build'), findsOneWidget);
+      expect(find.text('Recorded slip'), findsOneWidget);
+      expect(find.text('No history yet'), findsNothing);
+      expect(_timelineProgress(tester, history), 0);
+      expect(
+        tester.widget<Semantics>(_timelineDate(history)).properties.value,
+        '0% complete (0 of 2 habits)',
+      );
+
+      await _selectEarlierTimelineDate(tester, emptyDay);
+      expect(find.text('No habits on this date'), findsOneWidget);
+      expect(_timelineProgress(tester, emptyDay), 0);
+      expect(
+        tester.widget<Semantics>(_timelineDate(emptyDay)).properties.value,
+        '0% complete (0 of 0 habits)',
+      );
+    },
+  );
 
   testWidgets('quit heatmaps use the habit colour and leave slip days dark', (
     tester,
@@ -565,6 +839,8 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: HomeScreen(repository: repository)),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Quit soda'));
     await tester.pumpAndSettle();
 
     final slip = tester.widget<Container>(
@@ -1443,17 +1719,232 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isTrue);
+    expect(find.text('Slip-free today'), findsOneWidget);
     await tester.tap(find.byTooltip('Record a slip'));
     await tester.pumpAndSettle();
     expect(repository.habits.single.countOn(DateTime.now()), 1);
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isFalse);
+    expect(find.text('Slip recorded today'), findsOneWidget);
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      0,
+    );
 
     await tester.tap(find.byTooltip('Clear today’s slip'));
     await tester.pumpAndSettle();
     expect(repository.habits.single.countOn(DateTime.now()), 0);
     expect(repository.habits.single.isCompleteOn(DateTime.now()), isTrue);
+    expect(find.text('Slip-free today'), findsOneWidget);
     expect(find.byKey(const Key('tracking-save')), findsNothing);
   });
+
+  testWidgets(
+    'quit note editor shares slip status across detail entry points',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final today = DateUtils.dateOnly(DateTime.now());
+      final yesterday = DateTime(today.year, today.month, today.day - 1);
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [
+              Habit(
+                id: 'quit-soda',
+                name: 'Limit soda',
+                type: HabitType.quit,
+                quitLimit: 8,
+                startDate: yesterday,
+                colorValue: Colors.green.toARGB32(),
+                dailyCounts: {dayKey(today): 2, dayKey(yesterday): 8},
+              ),
+            ];
+      await tester.pumpWidget(
+        MaterialApp(home: HomeScreen(repository: repository)),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Limit soda'));
+      await tester.pumpAndSettle();
+
+      final dayCell = find.byKey(ValueKey('calendar-day-${dayKey(today)}'));
+      final progressBar = find.descendant(
+        of: dayCell,
+        matching: find.byType(LinearProgressIndicator),
+      );
+      await tester.scrollUntilVisible(
+        dayCell,
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.longPress(dayCell);
+      await tester.pumpAndSettle();
+      expect(tester.widget<LinearProgressIndicator>(progressBar).value, 0.75);
+      final slipSwitch = find.byType(SwitchListTile);
+      expect(tester.widget<SwitchListTile>(slipSwitch).value, isFalse);
+      expect(
+        tester.widget<SwitchListTile>(slipSwitch).activeTrackColor,
+        Color(Colors.green.toARGB32()),
+      );
+      await tester.enterText(find.byType(TextField), 'A draft note');
+
+      repository.failSavingHabits = true;
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(slipSwitch).value, isFalse);
+      expect(
+        find.text('Your slip status could not be saved. Please try again.'),
+        findsOneWidget,
+      );
+      expect(find.text('A draft note'), findsOneWidget);
+
+      repository.failSavingHabits = false;
+      repository.saveDelay = const Duration(milliseconds: 200);
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pump();
+      expect(tester.widget<SwitchListTile>(slipSwitch).onChanged, isNull);
+      await tester.pump(repository.saveDelay);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(slipSwitch).value, isTrue);
+      repository.saveDelay = Duration.zero;
+      expect(repository.habits.single.isCompleteOn(today), isFalse);
+      expect(repository.habits.single.countOn(today), 2);
+      expect(tester.widget<LinearProgressIndicator>(progressBar).value, 0);
+      expect(repository.notes, isEmpty);
+      expect(find.text('A draft note'), findsOneWidget);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(repository.notes[dayKey(today)], 'A draft note');
+      expect(
+        find.descendant(
+          of: dayCell,
+          matching: find.byIcon(Icons.close_rounded),
+        ),
+        findsOneWidget,
+      );
+
+      final preview = find.text('A draft note');
+      await tester.scrollUntilVisible(
+        preview,
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(preview);
+      await tester.pumpAndSettle();
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(slipSwitch).value, isTrue);
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pumpAndSettle();
+      expect(repository.habits.single.isCompleteOn(today), isTrue);
+      expect(repository.habits.single.countOn(today), 2);
+      expect(tester.widget<LinearProgressIndicator>(progressBar).value, 0.75);
+      await tester.tap(find.byTooltip('Close note editor'));
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('All notes'));
+      await tester.tap(find.text('All notes'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('A draft note'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(slipSwitch).value, isFalse);
+      await tester.tap(find.byTooltip('Close note editor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add note for a date'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Choose note date'));
+      await tester.pumpAndSettle();
+      if (yesterday.month != today.month) {
+        await tester.tap(find.byTooltip('Previous month').hitTestable());
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(
+        find.descendant(
+          of: find.byType(CalendarDatePicker),
+          matching: find.text('${yesterday.day}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(slipSwitch).value, isTrue);
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pumpAndSettle();
+      expect(repository.habits.single.isSlipFreeOn(yesterday), isTrue);
+    },
+  );
+
+  testWidgets(
+    'tracking opens the same quit note editor and keeps count drafts',
+    (tester) async {
+      final today = DateUtils.dateOnly(DateTime.now());
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [
+              Habit(
+                id: 'quit-soda',
+                name: 'Limit soda',
+                type: HabitType.quit,
+                quitLimit: 8,
+                tapAction: TapAction.enterTotal,
+                startDate: today,
+                dailyCounts: {dayKey(today): 2},
+              ),
+            ];
+      await tester.pumpWidget(
+        MaterialApp(home: HomeScreen(repository: repository)),
+      );
+      await tester.pumpAndSettle();
+      final track = find.byTooltip('Track today');
+      final noteButton = find.byKey(const Key('tracking-note'));
+      final count = find.byKey(const Key('tracking-count'));
+      final save = find.byKey(const Key('tracking-save'));
+
+      await tester.tap(track);
+      await tester.pumpAndSettle();
+      await tester.tap(noteButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close note editor'));
+      await tester.pumpAndSettle();
+      expect(find.text('Slip recorded'), findsOneWidget);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(repository.habits.single.hasNoteSlipOn(today), isTrue);
+      expect(find.text('Slip recorded · 2 / 8 times today'), findsOneWidget);
+      expect(
+        tester
+            .widget<LinearProgressIndicator>(
+              find.byType(LinearProgressIndicator),
+            )
+            .value,
+        0,
+      );
+
+      await tester.tap(track);
+      await tester.pumpAndSettle();
+      await tester.enterText(count, '3');
+      await tester.tap(noteButton);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isTrue,
+      );
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mark as slip'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close note editor'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(count).controller!.text, '3');
+      expect(repository.habits.single.countOn(today), 2);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(repository.habits.single.countOn(today), 3);
+      expect(repository.habits.single.hasNoteSlipOn(today), isFalse);
+    },
+  );
 
   testWidgets('quit habits save and track against a daily count limit', (
     tester,
@@ -1495,6 +1986,12 @@ void main() {
     final cell = find.byKey(ValueKey('habit-heatmap-${dayKey(today)}'));
     Color? heatmapColor() =>
         (tester.widget<Container>(cell).decoration! as BoxDecoration).color;
+    double? dailyBarValue() =>
+        tester
+            .widget<LinearProgressIndicator>(
+              find.byType(LinearProgressIndicator),
+            )
+            .value;
     final track = find.byTooltip('Track today');
     final input = find.byKey(const Key('tracking-count'));
     ButtonStyle trackStyle() =>
@@ -1511,12 +2008,15 @@ void main() {
 
     expect(buttonFill(), AppColors.burntOrange);
     expect(checkColor(), AppColors.carbon);
+    expect(find.text('Under limit · 0 / 5 times today'), findsOneWidget);
+    expect(dailyBarValue(), 1);
     for (var i = 0; i < 2; i++) {
       await tester.tap(track);
     }
     await tester.pumpAndSettle();
     expect(buttonFill()!.a, closeTo(0.68, 0.001));
-    expect(heatmapColor()!.a, closeTo(0.6, 0.001));
+    expect(find.text('Under limit · 2 / 5 times today'), findsOneWidget);
+    expect(dailyBarValue(), closeTo(0.6, 0.001));
     for (var i = 0; i < 2; i++) {
       await tester.tap(track);
     }
@@ -1524,7 +2024,7 @@ void main() {
     expect(input, findsNothing);
     expect(repository.habits.single.countOn(today), 4);
     expect(repository.habits.single.isCompleteOn(today), isTrue);
-    expect(heatmapColor()!.a, closeTo(0.2, 0.001));
+    expect(dailyBarValue(), closeTo(0.2, 0.001));
     expect(buttonFill()!.a, closeTo(0.36, 0.001));
     expect(checkColor(), AppColors.burntOrange);
 
@@ -1545,7 +2045,8 @@ void main() {
     expect(input, findsNothing);
     expect(repository.habits.single.countOn(today), 5);
     expect(repository.habits.single.isCompleteOn(today), isFalse);
-    expect(heatmapColor(), AppColors.carbon);
+    expect(find.text('Limit reached · 5 / 5 times today'), findsOneWidget);
+    expect(dailyBarValue(), 0);
     expect(buttonFill(), AppColors.burntOrange.withValues(alpha: 0.2));
     expect(checkColor(), AppColors.burntOrange);
     await tester.tap(find.text('Limit soda'));
@@ -1576,7 +2077,12 @@ void main() {
     expect(find.text('80%'), findsOneWidget);
     expect(
       tester
-          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .widget<LinearProgressIndicator>(
+            find.descendant(
+              of: find.byType(BottomSheet),
+              matching: find.byType(LinearProgressIndicator),
+            ),
+          )
           .value,
       0.8,
     );
@@ -1610,6 +2116,17 @@ void main() {
 
       final track = find.byTooltip('Track today');
       final input = find.byKey(const Key('tracking-count'));
+      if (cutoff == 0) {
+        expect(find.text('Slip-free · 0 / 0 times today'), findsOneWidget);
+        expect(
+          tester
+              .widget<LinearProgressIndicator>(
+                find.byType(LinearProgressIndicator),
+              )
+              .value,
+          1,
+        );
+      }
       if (initial < cutoff) {
         await tester.tap(track);
         await tester.pumpAndSettle();
@@ -1963,7 +2480,7 @@ void main() {
   });
 
   testWidgets(
-    'repeat fill appears in both calendars and allows a real check-in',
+    'repeat fill stays in habit history and still allows a real check-in',
     (tester) async {
       tester.view.physicalSize = const Size(450, 1000);
       tester.view.devicePixelRatio = 1;
@@ -1999,7 +2516,14 @@ void main() {
       final heatmapDay = find.byKey(ValueKey('habit-heatmap-${dayKey(today)}'));
       BoxDecoration heatmapDecoration() =>
           tester.widget<Container>(heatmapDay).decoration! as BoxDecoration;
-      expect(heatmapDecoration().color, color.withValues(alpha: 0.18));
+      double? dailyBarValue() =>
+          tester
+              .widget<LinearProgressIndicator>(
+                find.byType(LinearProgressIndicator),
+              )
+              .value;
+      expect(find.text('Not completed today'), findsOneWidget);
+      expect(dailyBarValue(), 0);
       expect(repository.habits.single.dailyCounts, hasLength(1));
 
       await tester.tap(find.text('Stretch'));
@@ -2024,10 +2548,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Mark complete'));
       await tester.pumpAndSettle();
-      expect(heatmapDecoration().color, color);
+      expect(find.text('Completed today'), findsOneWidget);
+      expect(dailyBarValue(), 1);
       expect(repository.habits.single.dailyCounts, hasLength(2));
       await tester.tap(find.text('Stretch'));
       await tester.pumpAndSettle();
+      expect(heatmapDecoration().color, color);
       expect(find.text('1 day'), findsOneWidget);
       expect(
         find.descendant(

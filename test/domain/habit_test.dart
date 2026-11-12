@@ -3,6 +3,51 @@ import 'package:rize/domain/habit.dart';
 
 void main() {
   group('Habit', () {
+    test('manual note slips preserve partial, zero, and missing check-ins', () {
+      final today = DateTime(2026, 10, 26);
+      final beforeStart = DateTime(2026, 10, 24);
+      final explicitZero = DateTime(2026, 10, 23);
+      final habit = Habit(
+        id: 'quit',
+        name: 'Limit soda',
+        type: HabitType.quit,
+        quitLimit: 8,
+        startDate: DateTime(2026, 10, 25),
+        dailyCounts: {dayKey(today): 2, dayKey(explicitZero): 0},
+      );
+
+      for (final day in [today, explicitZero, beforeStart]) {
+        final marked = habit.setNoteSlip(day, true);
+        expect(marked.isQuitSlipOn(day), isTrue);
+        expect(marked.isCompleteOn(day), isFalse);
+        expect(marked.dailyCounts, habit.dailyCounts);
+
+        final restored = marked.setNoteSlip(day, false);
+        expect(restored.isQuitSlipOn(day), isFalse);
+        expect(restored.dailyCounts, habit.dailyCounts);
+        expect(restored.isCompleteOn(day), habit.isCompleteOn(day));
+      }
+    });
+
+    test('clearing a count-based slip records zero and count edits win', () {
+      final day = DateTime(2026, 10, 26);
+      final habit = Habit(
+        id: 'quit',
+        name: 'Limit soda',
+        type: HabitType.quit,
+        quitLimit: 8,
+        startDate: day,
+      );
+      final failed = habit.setCount(day, 8);
+      expect(failed.isQuitSlipOn(day), isTrue);
+      expect(failed.setNoteSlip(day, false).isSlipFreeOn(day), isTrue);
+
+      final edited = habit.setNoteSlip(day, true).setCount(day, 2);
+      expect(edited.hasNoteSlipOn(day), isFalse);
+      expect(edited.isCompleteOn(day), isTrue);
+      expect(edited.countOn(day), 2);
+    });
+
     test('count changes stay between zero and the daily target', () {
       final habit = Habit(id: 'walk', name: 'Take a walk', target: 2);
       final today = DateTime(2026, 10, 26);

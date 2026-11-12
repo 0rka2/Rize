@@ -85,6 +85,7 @@ class Habit {
     this.buildRepeat = defaultBuildRepeat,
     this.startDate,
     this.dailyCounts = const {},
+    this.noteSlipDays = const {},
   });
 
   final String id;
@@ -104,6 +105,7 @@ class Habit {
   final BuildRepeatOptions buildRepeat;
   final DateTime? startDate;
   final Map<String, num> dailyCounts;
+  final Set<String> noteSlipDays;
 
   double countOn(DateTime day) => (dailyCounts[dayKey(day)] ?? 0).toDouble();
 
@@ -115,18 +117,35 @@ class Habit {
   bool meetsQuitLimit(num count) =>
       hasQuitLimit ? count < quitLimit : count == 0;
 
+  bool hasNoteSlipOn(DateTime day) => noteSlipDays.contains(dayKey(day));
+
+  bool isQuitSlipOn(DateTime day) =>
+      type == HabitType.quit &&
+      (hasNoteSlipOn(day) || !meetsQuitLimit(countOn(day)));
+
+  Habit setNoteSlip(DateTime day, bool isSlip) {
+    if (type != HabitType.quit || isQuitSlipOn(day) == isSlip) return this;
+
+    final key = dayKey(day);
+    if (isSlip) return copyWith(noteSlipDays: {...noteSlipDays, key});
+    if (noteSlipDays.contains(key)) {
+      return copyWith(noteSlipDays: {...noteSlipDays}..remove(key));
+    }
+    return setCount(day, 0);
+  }
+
   bool isSlipFreeOn(DateTime day) => countOn(day) == 0 && isCompleteOn(day);
 
   bool isCompleteOn(DateTime day) {
-    final count = countOn(day);
     if (type == HabitType.quit) {
       final started = startDate ?? DateTime.now();
       final startedDay = DateTime(started.year, started.month, started.day);
       final checkedDay = DateTime(day.year, day.month, day.day);
-      return meetsQuitLimit(count) &&
+      return !isQuitSlipOn(day) &&
           (!checkedDay.isBefore(startedDay) ||
               dailyCounts.containsKey(dayKey(day)));
     }
+    final count = countOn(day);
     if (trackingMode == TrackingMode.yesNo) return count > 0;
     return count >= target;
   }
@@ -143,7 +162,10 @@ class Habit {
 
   Habit removeCount(DateTime day) => setCount(day, countOn(day) - 1);
 
-  Habit toggleDay(DateTime day) => setCount(day, countOn(day) > 0 ? 0 : 1);
+  Habit toggleDay(DateTime day) =>
+      hasNoteSlipOn(day)
+          ? setNoteSlip(day, false)
+          : setCount(day, countOn(day) > 0 ? 0 : 1);
 
   Habit setCount(DateTime day, double count) {
     final updatedCounts = {
@@ -160,7 +182,11 @@ class Habit {
     } else {
       updatedCounts[key] = count;
     }
-    return copyWith(dailyCounts: updatedCounts);
+    return copyWith(
+      dailyCounts: updatedCounts,
+      noteSlipDays:
+          noteSlipDays.contains(key) ? ({...noteSlipDays}..remove(key)) : null,
+    );
   }
 
   int currentStreak(DateTime today) {
@@ -424,6 +450,7 @@ class Habit {
     BuildRepeatOptions? buildRepeat,
     DateTime? startDate,
     Map<String, num>? dailyCounts,
+    Set<String>? noteSlipDays,
   }) => Habit(
     id: id,
     name: name ?? this.name,
@@ -442,6 +469,7 @@ class Habit {
     buildRepeat: buildRepeat ?? this.buildRepeat,
     startDate: startDate ?? this.startDate,
     dailyCounts: dailyCounts ?? this.dailyCounts,
+    noteSlipDays: noteSlipDays ?? this.noteSlipDays,
   );
 
   Habit withSettings(HabitSettings settings) => copyWith(
@@ -450,6 +478,7 @@ class Habit {
     colorValue: settings.colorValue,
     icon: settings.icon,
     type: settings.type,
+    noteSlipDays: settings.type == HabitType.build ? const {} : null,
     trackingMode: settings.trackingMode,
     target: settings.target,
     quitLimit: settings.quitLimit,

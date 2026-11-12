@@ -7,7 +7,15 @@ import '../domain/habit.dart';
 
 class HabitRepository {
   static const _databaseName = 'rize.db';
-  static const _databaseVersion = 7;
+  static const _databaseVersion = 8;
+  static const _createNoteSlips = '''
+    CREATE TABLE note_slips (
+      habit_id TEXT NOT NULL,
+      day TEXT NOT NULL,
+      PRIMARY KEY (habit_id, day),
+      FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE
+    )
+  ''';
   static const _repeatDefaults = {
     'repeat_weekdays': repeatWeekdays,
     'repeat_gap_days': 5,
@@ -72,6 +80,7 @@ class HabitRepository {
             FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE
           )
         ''');
+        await database.execute(_createNoteSlips);
       },
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -164,6 +173,9 @@ class HabitRepository {
             'ALTER TABLE habits ADD COLUMN quit_limit REAL NOT NULL DEFAULT 0',
           );
         }
+        if (oldVersion < 8) {
+          await database.execute(_createNoteSlips);
+        }
       },
     );
   }
@@ -172,12 +184,19 @@ class HabitRepository {
     final database = await _db;
     final habitRows = await database.query('habits', orderBy: 'rowid');
     final checkInRows = await database.query('check_ins');
+    final slipRows = await database.query('note_slips');
     final countsByHabit = <String, Map<String, num>>{};
+    final slipsByHabit = <String, Set<String>>{};
 
     for (final row in checkInRows) {
       final habitId = row['habit_id'] as String;
       final counts = countsByHabit.putIfAbsent(habitId, () => <String, num>{});
       counts[row['day'] as String] = (row['count'] as num).toDouble();
+    }
+    for (final row in slipRows) {
+      slipsByHabit
+          .putIfAbsent(row['habit_id'] as String, () => <String>{})
+          .add(row['day'] as String);
     }
 
     return habitRows
@@ -227,6 +246,7 @@ class HabitRepository {
                     ? null
                     : DateTime.parse(row['start_date'] as String),
             dailyCounts: countsByHabit[row['id']] ?? const <String, double>{},
+            noteSlipDays: slipsByHabit[row['id']] ?? const {},
           ),
         )
         .toList();
@@ -236,6 +256,12 @@ class HabitRepository {
     final database = await _db;
     await database.transaction((transaction) async {
       final existingRows = await transaction.query('habits', columns: ['id']);
+      final savedSlips = <String, Set<String>>{};
+      for (final row in await transaction.query('note_slips')) {
+        savedSlips
+            .putIfAbsent(row['habit_id'] as String, () => <String>{})
+            .add(row['day'] as String);
+      }
       final existingIds =
           existingRows.map((row) => row['id'] as String).toSet();
       final incomingIds = habits.map((habit) => habit.id).toSet();
@@ -260,6 +286,21 @@ class HabitRepository {
           await transaction.insert('habits', {
             'id': habit.id,
             ..._habitValues(habit),
+          });
+        }
+
+        final previousSlips = savedSlips[habit.id] ?? const <String>{};
+        for (final day in previousSlips.difference(habit.noteSlipDays)) {
+          await transaction.delete(
+            'note_slips',
+            where: 'habit_id = ? AND day = ?',
+            whereArgs: [habit.id, day],
+          );
+        }
+        for (final day in habit.noteSlipDays.difference(previousSlips)) {
+          await transaction.insert('note_slips', {
+            'habit_id': habit.id,
+            'day': day,
           });
         }
 

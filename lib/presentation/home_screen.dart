@@ -6,9 +6,13 @@ import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'add_habit_screen.dart';
 import 'habit_detail_screen.dart';
-import 'habit_heatmap.dart';
 import 'habit_icons.dart';
+import 'habit_note_editor.dart';
+import 'today_timeline.dart';
 import 'unsaved_changes.dart';
+
+String _formatCount(double value) =>
+    value == value.truncateToDouble() ? value.toInt().toString() : '$value';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({required this.repository, super.key});
@@ -20,7 +24,10 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const _editablePastDays = 7;
+
   List<Habit> _habits = [];
+  DateTime? _selectedDay;
   Future<void> _trackingWrites = Future<void>.value();
   bool _trackingEditorOpen = false;
   bool _isLoading = true;
@@ -99,28 +106,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 final updated =
                     _habits
                         .map(
-                          (item) =>
-                              item.id == habit.id ? updatedHabit : item,
+                          (item) => item.id == habit.id ? updatedHabit : item,
                         )
                         .toList();
                 final saved = await _saveHabits(updated);
                 return saved ? updatedHabit : null;
               },
-              onSetSlipDay: (day, isSlip) async {
-                final current = _habits.firstWhere(
-                  (item) => item.id == habit.id,
-                );
-                final updatedHabit = current.setCount(day, isSlip ? 1 : 0);
-                final updated =
-                    _habits
-                        .map(
-                          (item) =>
-                              item.id == habit.id ? updatedHabit : item,
-                        )
-                        .toList();
-                final saved = await _saveHabits(updated);
-                return saved ? updatedHabit : null;
-              },
+              onSetSlipDay:
+                  (day, isSlip) => _setNoteSlip(habit.id, day, isSlip),
               onEdit:
                   () => _editHabit(
                     _habits.firstWhere((item) => item.id == habit.id),
@@ -130,29 +123,35 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<Habit?> _trackHabit(Habit habit, [DateTime? selectedDate]) async {
+  Future<Habit?> _trackHabit(Habit habit, DateTime day) async {
     if (_trackingEditorOpen) return null;
 
-    final now = DateTime.now();
-    final today = selectedDate ?? DateTime(now.year, now.month, now.day);
     if (habit.trackingMode == TrackingMode.yesNo) {
       final result = await _saveTrackingChange(
         habit.id,
-        (current) => current.toggleDay(today),
+        (current) => current.toggleDay(day),
       );
       return result.habit;
     }
 
     if (habit.tapAction == TapAction.addOne) {
       final result = await _saveTrackingChange(habit.id, (current) {
-        return current.countOn(today) < current.dailyTrackingThreshold
-            ? current.addCount(today)
+        return current.countOn(day) < current.dailyTrackingThreshold
+            ? current.addCount(day)
             : null;
       });
       if (!result.openEditor) return result.habit;
     }
 
-    return _openTrackingEditor(habit.id, today);
+    return _openTrackingEditor(habit.id, day);
+  }
+
+  Future<Habit?> _setNoteSlip(String id, DateTime day, bool isSlip) async {
+    final result = await _saveTrackingChange(
+      id,
+      (habit) => habit.setNoteSlip(day, isSlip),
+    );
+    return result.habit;
   }
 
   Future<Habit?> _openTrackingEditor(String id, DateTime day) async {
@@ -182,9 +181,17 @@ class _HomeScreenState extends State<HomeScreen> {
               today: day,
               repository: widget.repository,
               initialNote: initialNote,
+              onSetSlip: (day, isSlip) => _setNoteSlip(id, day, isSlip),
             ),
       );
-      if (count == null || !mounted) return null;
+      if (!mounted) return null;
+      final current = _habits.firstWhere((item) => item.id == id);
+      if (count == null) return identical(current, habit) ? null : current;
+      // A slip edit already saved the day's state, including a missing count.
+      if (count == current.countOn(day) &&
+          (current.hasNoteSlipOn(day) || !identical(current, habit))) {
+        return current;
+      }
 
       final result = await _saveTrackingChange(
         id,
@@ -229,82 +236,133 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  bool _isActiveOn(Habit habit, DateTime day, DateTime today) {
+    final key = dayKey(day);
+    if (habit.dailyCounts.containsKey(key) || habit.hasNoteSlipOn(day)) {
+      return true;
+    }
+    final start = habit.startDate;
+    if (start != null) return !day.isBefore(DateUtils.dateOnly(start));
+    return day == today ||
+        habit.dailyCounts.keys.any((date) => date.compareTo(key) < 0) ||
+        habit.noteSlipDays.any((date) => date.compareTo(key) < 0);
+  }
+
+  ({int completed, int active}) _completionForDay(
+    DateTime day,
+    DateTime today,
+  ) {
+    var completed = 0;
+    var active = 0;
+    for (final habit in _habits) {
+      if (!_isActiveOn(habit, day, today)) continue;
+      active++;
+      if (habit.isCompleteOn(day)) completed++;
+    }
+    return (completed: completed, active: active);
+  }
+
+  bool _canTrackTimelineDay(DateTime day, DateTime today) =>
+      !day.isBefore(shiftHabitDay(today, -_editablePastDays)) &&
+      !day.isAfter(today);
+
+  void _trackTimelineDay(Habit habit, DateTime? selectedDay) {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final day = selectedDay ?? today;
+    if (_canTrackTimelineDay(day, today)) _trackHabit(habit, day);
+  }
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: RefreshIndicator(
-        onRefresh: _loadHabits,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(24, 28, 24, 18),
-              sliver: SliverToBoxAdapter(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Today',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.7,
-                        ),
-                      ),
-                    ),
-                    IconButton.filled(
-                      tooltip: 'Add habit',
-                      onPressed: _isLoading ? null : _openAddHabit,
-                      icon: const Icon(Icons.add_rounded, size: 28),
-                      style: IconButton.styleFrom(
-                        backgroundColor: AppColors.burntOrange,
-                        foregroundColor: AppColors.carbon,
-                        minimumSize: const Size(52, 52),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (_hasStorageError)
-              const SliverPadding(
-                padding: EdgeInsets.symmetric(horizontal: 20),
-                sliver: SliverToBoxAdapter(child: _StorageMessage()),
-              ),
-            if (_isLoading)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_habits.isEmpty)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: _EmptyState(onAddHabit: _openAddHabit),
-              )
-            else
+  Widget build(BuildContext context) {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final day = _selectedDay ?? today;
+    final isToday = day == today;
+    final canTrack = _canTrackTimelineDay(day, today);
+    final activeHabits =
+        _habits.where((habit) => _isActiveOn(habit, day, today)).toList();
+
+    return Scaffold(
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _loadHabits,
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    final habit = _habits[index];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _HabitCard(
-                        habit: habit,
-                        today: DateTime.now(),
-                        onOpen: () => _openDetails(habit),
-                        onTrack: () => _trackHabit(habit),
-                      ),
-                    );
-                  }, childCount: _habits.length),
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                sliver: SliverToBoxAdapter(
+                  child: TodayTimeline(
+                    today: today,
+                    selectedDay: day,
+                    completionForDay: (date) => _completionForDay(date, today),
+                    onSelectDay:
+                        (date) => setState(() {
+                          _selectedDay = date == today ? null : date;
+                        }),
+                    onAddHabit: _isLoading ? null : _openAddHabit,
+                  ),
                 ),
               ),
-          ],
+              if (_hasStorageError)
+                const SliverPadding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverToBoxAdapter(child: _StorageMessage()),
+                ),
+              if (!canTrack)
+                const SliverPadding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  sliver: SliverToBoxAdapter(
+                    child: Text(
+                      'Read-only · Tracking is available for the past $_editablePastDays days.',
+                      style: TextStyle(color: AppColors.coolGrey),
+                    ),
+                  ),
+                ),
+              if (_isLoading)
+                const SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (activeHabits.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child:
+                      isToday && _habits.isEmpty
+                          ? _EmptyState(onAddHabit: _openAddHabit)
+                          : const Center(child: Text('No habits on this date')),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+                  sliver: SliverList.builder(
+                    itemCount: activeHabits.length,
+                    itemBuilder: (context, index) {
+                      final habit = activeHabits[index];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _HabitCard(
+                          habit: habit,
+                          day: day,
+                          isToday: isToday,
+                          onOpen: () => _openDetails(habit),
+                          onTrack:
+                              canTrack
+                                  ? () => _trackTimelineDay(
+                                    habit,
+                                    isToday ? null : day,
+                                  )
+                                  : null,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _DailyTrackingSheet extends StatefulWidget {
@@ -313,18 +371,21 @@ class _DailyTrackingSheet extends StatefulWidget {
     required this.today,
     required this.repository,
     required this.initialNote,
+    required this.onSetSlip,
   });
 
   final Habit habit;
   final DateTime today;
   final HabitRepository repository;
   final String initialNote;
+  final Future<Habit?> Function(DateTime day, bool isSlip) onSetSlip;
 
   @override
   State<_DailyTrackingSheet> createState() => _DailyTrackingSheetState();
 }
 
 class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
+  late Habit _habit;
   late final TextEditingController _countController;
   late final TextEditingController _noteController;
   late double _count;
@@ -337,13 +398,14 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   bool get _hasUnsavedChanges =>
       _count != _initialCount || _noteController.text.trim() != _note;
 
-  Habit get _habit => widget.habit;
   bool get _isYesNo => _habit.trackingMode == TrackingMode.yesNo;
   bool get _isQuit => _habit.type == HabitType.quit;
+  bool get _hasSavedNoteSlip =>
+      _count == _initialCount && _habit.hasNoteSlipOn(widget.today);
   double get _goal => _isYesNo ? 1 : _habit.dailyTrackingThreshold;
   double get _progress {
     if (_isQuit && !_habit.hasQuitLimit) {
-      return _habit.meetsQuitLimit(_count) ? 1 : 0;
+      return !_hasSavedNoteSlip && _habit.meetsQuitLimit(_count) ? 1 : 0;
     }
     return (_count / _goal).clamp(0, 1);
   }
@@ -351,6 +413,7 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   @override
   void initState() {
     super.initState();
+    _habit = widget.habit;
     _count = _habit.countOn(widget.today);
     _initialCount = _count;
     _note = widget.initialNote;
@@ -364,9 +427,6 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
     _noteController.dispose();
     super.dispose();
   }
-
-  String _formatCount(double value) =>
-      value == value.truncateToDouble() ? value.toInt().toString() : '$value';
 
   void _setCount(double value) {
     final next =
@@ -385,7 +445,43 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   }
 
   Future<void> _editNote() async {
-    setState(() => _isEditingNote = true);
+    if (!_isQuit) {
+      setState(() => _isEditingNote = true);
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    final savedNote = await showHabitNoteEditor(
+      context,
+      day: widget.today,
+      habit: _habit,
+      notes: {if (_note.isNotEmpty) dayKey(widget.today): _note},
+      repository: widget.repository,
+      allowDateChange: false,
+      onSetSlip: _setNoteSlip,
+    );
+    if (savedNote != null && mounted) {
+      setState(() {
+        _note = savedNote.content;
+        _noteController.text = _note;
+      });
+    }
+  }
+
+  Future<Habit?> _setNoteSlip(DateTime day, bool isSlip) async {
+    final updated = await widget.onSetSlip(day, isSlip);
+    if (updated == null || !mounted) return updated;
+
+    setState(() {
+      final countChanged = _count != _initialCount;
+      _habit = updated;
+      _initialCount = updated.countOn(day);
+      if (!countChanged) {
+        _count = _initialCount;
+        _countController.text = _formatCount(_count);
+      }
+    });
+    return updated;
   }
 
   Future<bool> _saveNote() async {
@@ -455,6 +551,7 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
     final accent = Color(_habit.colorValue);
     final unit = _habit.unit.isEmpty ? 'times' : _habit.unit;
     final percent = (_progress * 100).round();
+    final isToday = dayKey(widget.today) == dayKey(DateTime.now());
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
     return UnsavedChangesGuard(
@@ -540,7 +637,7 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
                               ),
                             const SizedBox(height: 3),
                             Text(
-                              '${dayKey(widget.today) == dayKey(DateTime.now()) ? 'Today  ·  ' : ''}${_dateLabel(widget.today)}',
+                              '${isToday ? 'Today  ·  ' : ''}${_dateLabel(widget.today)}',
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: AppColors.coolGrey),
                             ),
@@ -704,10 +801,14 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
                       maxLines: 3,
                       maxLength: 500,
                       onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: "Today's note",
-                        hintText: 'Add a note about today',
-                        border: OutlineInputBorder(),
+                      decoration: InputDecoration(
+                        labelText:
+                            isToday ? "Today's note" : 'Note for this date',
+                        hintText:
+                            isToday
+                                ? 'Add a note about today'
+                                : 'Add a note for this date',
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                     Align(
@@ -831,6 +932,7 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   );
 
   String _goalLabel(String unit) {
+    if (_hasSavedNoteSlip) return 'Slip recorded';
     if (_isQuit && _habit.hasQuitLimit) {
       return 'Stay under ${_formatCount(_habit.quitLimit)} $unit';
     }
@@ -871,26 +973,64 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
 class _HabitCard extends StatelessWidget {
   const _HabitCard({
     required this.habit,
-    required this.today,
+    required this.day,
+    required this.isToday,
     required this.onOpen,
     required this.onTrack,
   });
 
   final Habit habit;
-  final DateTime today;
+  final DateTime day;
+  final bool isToday;
   final VoidCallback onOpen;
-  final VoidCallback onTrack;
+  final VoidCallback? onTrack;
+
+  String _progressLabel(double amount, double threshold, bool complete) {
+    final isYesNo = habit.trackingMode == TrackingMode.yesNo;
+    final status = switch (habit.type) {
+      HabitType.build when isYesNo => complete ? 'Completed' : 'Not completed',
+      HabitType.build => null,
+      HabitType.quit when habit.isQuitSlipOn(day) =>
+        habit.hasQuitLimit && !habit.hasNoteSlipOn(day)
+            ? 'Limit reached'
+            : 'Slip recorded',
+      HabitType.quit when !complete => 'Not started',
+      HabitType.quit when habit.hasQuitLimit => 'Under limit',
+      HabitType.quit => 'Slip-free',
+    };
+
+    final details = [if (status != null) status];
+    if (!isYesNo) {
+      final savedUnit = habit.unit.trim();
+      final unit = savedUnit.isEmpty ? 'times' : savedUnit;
+      details.add('${_formatCount(amount)} / ${_formatCount(threshold)} $unit');
+    }
+    return '${details.join(' · ')}${isToday ? ' today' : ''}';
+  }
+
+  String _trackTooltip(bool complete) {
+    if (onTrack == null) return 'Tracking unavailable for this date';
+    if (habit.trackingMode != TrackingMode.yesNo) {
+      return isToday ? 'Track today' : 'Track this date';
+    }
+    if (habit.type == HabitType.build) {
+      return complete ? 'Mark incomplete' : 'Mark complete';
+    }
+    if (complete) return 'Record a slip';
+    return isToday ? 'Clear today’s slip' : 'Clear slip';
+  }
 
   @override
   Widget build(BuildContext context) {
     final color = Color(habit.colorValue);
-    final completedToday = habit.isCompleteOn(today);
+    final complete = habit.isCompleteOn(day);
     final isQuit = habit.type == HabitType.quit;
+    final amount = habit.countOn(day);
     final threshold = habit.dailyTrackingThreshold;
-    var fillStrength = completedToday ? 1.0 : 0.0;
+    var fillStrength = complete ? 1.0 : 0.0;
     if (habit.trackingMode != TrackingMode.yesNo && threshold > 0) {
-      final progress = (habit.countOn(today) / threshold).clamp(0.0, 1.0);
-      fillStrength = isQuit ? (completedToday ? 1 - progress : 0) : progress;
+      final progress = (amount / threshold).clamp(0.0, 1.0);
+      fillStrength = isQuit ? (complete ? 1 - progress : 0) : progress;
     }
     return Material(
       color: AppColors.charcoalGrey,
@@ -932,16 +1072,12 @@ class _HabitCard extends StatelessWidget {
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
-                        if (habit.description.isNotEmpty) ...[
-                          const SizedBox(height: 3),
-                          Text(
-                            habit.description,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: AppColors.coolGrey),
-                          ),
-                        ],
+                        const SizedBox(height: 3),
+                        Text(
+                          _progressLabel(amount, threshold, complete),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: AppColors.coolGrey),
+                        ),
                       ],
                     ),
                   ),
@@ -949,40 +1085,41 @@ class _HabitCard extends StatelessWidget {
                   SizedBox(
                     width: 54,
                     height: 54,
-                    child: IconButton.filled(
-                      tooltip:
-                          isQuit && habit.trackingMode == TrackingMode.yesNo
-                              ? completedToday
-                                  ? 'Record a slip'
-                                  : 'Clear today’s slip'
-                              : habit.trackingMode == TrackingMode.yesNo
-                              ? (completedToday
-                                  ? 'Mark incomplete'
-                                  : 'Mark complete')
-                              : 'Track today',
-                      onPressed: onTrack,
-                      style: IconButton.styleFrom(
-                        backgroundColor: color.withValues(
-                          alpha: 0.2 + 0.8 * fillStrength,
+                    child: GestureDetector(
+                      // A disabled check button should not open habit details.
+                      onTap: onTrack == null ? () {} : null,
+                      behavior: HitTestBehavior.opaque,
+                      excludeFromSemantics: true,
+                      child: IconButton.filled(
+                        tooltip: _trackTooltip(complete),
+                        onPressed: onTrack,
+                        style: IconButton.styleFrom(
+                          backgroundColor: color.withValues(
+                            alpha: 0.2 + 0.8 * fillStrength,
+                          ),
+                          foregroundColor:
+                              fillStrength >= 0.5 ? AppColors.carbon : color,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(17),
+                          ),
                         ),
-                        foregroundColor:
-                            fillStrength >= 0.5 ? AppColors.carbon : color,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(17),
-                        ),
+                        icon: const Icon(Icons.check_rounded, size: 30),
                       ),
-                      icon: const Icon(Icons.check_rounded, size: 30),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              HabitHeatmap(
-                habit: habit,
-                startDate: DateTime(today.year, today.month, today.day - 179),
-                endDate: today,
-                showMonthLabels: false,
-                showWeekdayLabels: false,
+              const SizedBox(height: 12),
+              ExcludeSemantics(
+                child: LinearProgressIndicator(
+                  value: fillStrength,
+                  minHeight: 4,
+                  borderRadius: BorderRadius.circular(2),
+                  backgroundColor: AppColors.coolGrey.withValues(alpha: 0.16),
+                  color: color,
+                  trackGap: 0,
+                  stopIndicatorRadius: 0,
+                ),
               ),
             ],
           ),
