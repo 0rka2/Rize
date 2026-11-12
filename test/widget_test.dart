@@ -121,10 +121,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(find.text('New Habit'), findsOneWidget);
-      expect(
-        find.text('Enter a name, valid goal, and measurement unit.'),
-        findsOneWidget,
-      );
+      expect(find.text('Enter a habit name.'), findsOneWidget);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Discard'));
@@ -132,6 +129,97 @@ void main() {
       expect(find.text('Add your first habit'), findsOneWidget);
     },
   );
+
+  for (final type in HabitType.values) {
+    for (final mode in [TrackingMode.count, TrackingMode.measure]) {
+      testWidgets('daily amount validation for ${type.name} ${mode.name}', (
+        tester,
+      ) async {
+        final isQuit = type == HabitType.quit;
+        final isMeasure = mode == TrackingMode.measure;
+        final label = isQuit ? 'Daily limit' : 'Daily goal';
+        final repository =
+            _MemoryHabitRepository()
+              ..habits = [
+                Habit(
+                  id: 'habit',
+                  name: 'Test habit',
+                  type: type,
+                  trackingMode: mode,
+                  unit: isMeasure ? 'minutes' : 'times',
+                ),
+              ];
+        await tester.pumpWidget(RizeApp(repository: repository));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Test habit'));
+        await tester.pumpAndSettle();
+
+        final amount = find.byKey(const Key('habit-goal'));
+        final unit = find.byKey(const Key('habit-unit'));
+        final save = find.text('Save changes');
+
+        Future<void> openEditor() async {
+          await tester.tap(find.byTooltip('Edit habit'));
+          await tester.pumpAndSettle();
+          await tester.scrollUntilVisible(
+            amount,
+            200,
+            scrollable: find.byType(Scrollable).first,
+          );
+        }
+
+        double savedAmount() =>
+            isQuit
+                ? repository.habits.single.quitLimit
+                : repository.habits.single.target;
+
+        await openEditor();
+        final originalAmount = savedAmount();
+        final invalidAmounts = [
+          ('6299999999', '$label must be 999,999 or less.'),
+          ('1000000', '$label must be 999,999 or less.'),
+          ('', '$label must be a number.'),
+          if (isMeasure) ...[
+            ('999999.1', '$label must be 999,999 or less.'),
+            ('1.2.3', '$label must be a number.'),
+          ],
+          if (!isQuit) ('0', 'Daily goal must be greater than 0.'),
+        ];
+
+        Future<void> expectError(String message) async {
+          await tester.tap(save);
+          await tester.pumpAndSettle();
+          expect(find.text(message), findsOneWidget);
+          expect(find.text('Edit Habit'), findsOneWidget);
+          expect(savedAmount(), originalAmount);
+          await tester.pump(const Duration(seconds: 4));
+          await tester.pumpAndSettle();
+        }
+
+        for (final (input, message) in invalidAmounts) {
+          await tester.enterText(amount, input);
+          await expectError(message);
+        }
+
+        if (isMeasure) {
+          await tester.enterText(amount, '999999');
+          await tester.enterText(unit, ' ');
+          await expectError('Enter a measurement unit, such as minutes or km.');
+          await tester.enterText(unit, 'minutes');
+        }
+
+        final validAmounts = [999999, isQuit ? 0 : 1, if (isMeasure) 0.5];
+        for (final (index, value) in validAmounts.indexed) {
+          if (index > 0) await openEditor();
+          await tester.enterText(amount, '$value');
+          await tester.tap(save);
+          await tester.pumpAndSettle();
+          expect(find.text('Edit Habit'), findsNothing);
+          expect(savedAmount(), value);
+        }
+      });
+    }
+  }
 
   testWidgets('heatmap month labels use three-letter abbreviations', (
     tester,

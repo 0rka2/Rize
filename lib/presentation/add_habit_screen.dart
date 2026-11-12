@@ -17,6 +17,8 @@ class AddHabitScreen extends StatefulWidget {
 }
 
 class _AddHabitScreenState extends State<AddHabitScreen> {
+  static const _maximumDailyAmount = 999999;
+
   static const _colors = <Color>[
     Color(0xFFFF6B70),
     Color(0xFFFF963D),
@@ -128,31 +130,26 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
 
   void _save() {
     final name = _nameController.text.trim();
-    final targetText = _targetController.text.trim();
-    final target = double.tryParse(targetText);
+    final target = double.tryParse(_targetController.text.trim());
     final quitLimit = double.tryParse(_quitLimitController.text.trim());
-    final validQuitLimit =
-        quitLimit != null &&
-        quitLimit.isFinite &&
-        quitLimit >= 0 &&
-        quitLimit <= 999999 &&
-        (_trackingMode != TrackingMode.count ||
-            quitLimit == quitLimit.truncateToDouble());
+    final quitLimitError = _dailyAmountError(quitLimit, isQuit: true);
     final unit = _unitController.text.trim();
-    if (name.isEmpty ||
-        ((_type == HabitType.build && _trackingMode != TrackingMode.yesNo) &&
-            (target == null || target <= 0 || target > 999999)) ||
-        (_type == HabitType.quit &&
-            _trackingMode != TrackingMode.yesNo &&
-            !validQuitLimit) ||
-        (_trackingMode == TrackingMode.measure && unit.isEmpty)) {
+    final dailyAmountError = switch ((_type, _trackingMode)) {
+      (_, TrackingMode.yesNo) => null,
+      (HabitType.quit, _) => quitLimitError,
+      (HabitType.build, _) => _dailyAmountError(target, isQuit: false),
+    };
+    final error =
+        name.isEmpty
+            ? 'Enter a habit name.'
+            : dailyAmountError ??
+                (_trackingMode == TrackingMode.measure && unit.isEmpty
+                    ? 'Enter a measurement unit, such as minutes or km.'
+                    : null);
+    if (error != null) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('Enter a name, valid goal, and measurement unit.'),
-          ),
-        );
+        ..showSnackBar(SnackBar(content: Text(error)));
       return;
     }
 
@@ -165,7 +162,8 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
         type: _type,
         trackingMode: _trackingMode,
         target: target ?? 1,
-        quitLimit: validQuitLimit ? quitLimit : widget.habit?.quitLimit ?? 0,
+        quitLimit:
+            quitLimitError == null ? quitLimit! : widget.habit?.quitLimit ?? 0,
         unit:
             _trackingMode == TrackingMode.measure
                 ? unit
@@ -181,6 +179,26 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     );
   }
 
+  String? _dailyAmountError(double? amount, {required bool isQuit}) {
+    final label = isQuit ? 'Daily limit' : 'Daily goal';
+    if (amount != null && amount > _maximumDailyAmount) {
+      return '$label must be 999,999 or less.';
+    }
+    if (amount == null || !amount.isFinite) {
+      return '$label must be a number.';
+    }
+    if (isQuit) {
+      if (amount < 0) return 'Daily limit must be 0 or more.';
+      if (_trackingMode == TrackingMode.count &&
+          amount != amount.truncateToDouble()) {
+        return 'Daily limit must be a whole number.';
+      }
+    } else if (amount <= 0) {
+      return 'Daily goal must be greater than 0.';
+    }
+    return null;
+  }
+
   TextEditingController get _dailyAmountController =>
       _type == HabitType.quit ? _quitLimitController : _targetController;
 
@@ -189,9 +207,9 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     final enteredAmount = double.tryParse(_dailyAmountController.text);
     final current =
         enteredAmount != null && enteredAmount.isFinite
-            ? enteredAmount.clamp(minimum, 999999).toInt()
+            ? enteredAmount.clamp(minimum, _maximumDailyAmount).toInt()
             : minimum;
-    final next = (current + amount).clamp(minimum, 999999);
+    final next = (current + amount).clamp(minimum, _maximumDailyAmount);
     setState(() => _dailyAmountController.text = '$next');
   }
 
