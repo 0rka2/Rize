@@ -7,6 +7,7 @@ import 'package:rize/main.dart';
 import 'package:rize/presentation/habit_heatmap.dart';
 import 'package:rize/presentation/habit_detail_screen.dart';
 import 'package:rize/presentation/home_screen.dart';
+import 'package:rize/presentation/recent_habits_table.dart';
 import 'package:rize/presentation/today_timeline.dart';
 import 'package:rize/theme/app_colors.dart';
 
@@ -44,6 +45,11 @@ class _MemoryHabitRepository extends HabitRepository {
 
 Finder _timelineDate(DateTime day) =>
     find.byKey(ValueKey('today-date-${dayKey(day)}'));
+
+Finder _viewMenuItem(String label) => find.ancestor(
+  of: find.text(label),
+  matching: find.byWidgetPredicate((widget) => widget is CheckedPopupMenuItem),
+);
 
 double? _timelineProgress(WidgetTester tester, DateTime day) =>
     tester
@@ -555,7 +561,137 @@ void main() {
     expect(bar.value, closeTo(0.3005, 0.0001));
     expect(bar.color, Color(habit.colorValue));
     expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('View'));
+    await tester.pumpAndSettle();
+    await tester.tap(_viewMenuItem('Heatmaps'));
+    await tester.pumpAndSettle();
+    final heatmap = find.byType(HabitHeatmap);
+    expect(heatmap, findsOneWidget);
+    expect(
+      tester.widget<HabitHeatmap>(heatmap).endDate,
+      DateUtils.dateOnly(today),
+    );
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(subtitle, findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('View'));
+    await tester.pumpAndSettle();
+    await tester.tap(_viewMenuItem('Progress bars'));
+    await tester.pumpAndSettle();
+    expect(heatmap, findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
   });
+
+  testWidgets('Last 5 days keeps a fixed range and tracks the tapped date', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final today = DateUtils.dateOnly(DateTime.now());
+    final yesterday = shiftHabitDay(today, -1);
+    final habit = Habit(id: 'read', name: 'Read', startDate: yesterday);
+    final repository = _MemoryHabitRepository()..habits = [habit];
+    await tester.pumpWidget(RizeApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    Future<void> chooseView(String label) async {
+      await tester.tap(find.text('View'));
+      await tester.pumpAndSettle();
+      await tester.tap(_viewMenuItem(label));
+      await tester.pumpAndSettle();
+    }
+
+    final timeline = find.byKey(const Key('today-week-timeline'));
+    await tester.drag(timeline, const Offset(235, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(_timelineDate(shiftHabitDay(today, -7)));
+    await tester.pumpAndSettle();
+    await chooseView('Last 5 days');
+    expect(timeline, findsNothing);
+    expect(find.text('Last 5 days'), findsOneWidget);
+    expect(find.text('1 habit'), findsOneWidget);
+    expect(find.text('🔥0'), findsOneWidget);
+    for (var offset = -4; offset <= 0; offset++) {
+      final day = shiftHabitDay(today, offset);
+      final marker = find.byKey(ValueKey('recent-read-${dayKey(day)}'));
+      final rect = tester.getRect(marker);
+      expect(rect.left, greaterThanOrEqualTo(20));
+      expect(rect.right, lessThanOrEqualTo(300));
+      expect(rect.height, greaterThanOrEqualTo(48));
+      if (offset < -1) {
+        expect(tester.widget<InkWell>(marker).onTap, isNull);
+      }
+    }
+    final marker = find.byKey(ValueKey('recent-read-${dayKey(yesterday)}'));
+    await tester.tap(marker);
+    await tester.pumpAndSettle();
+    expect(repository.habits.single.countOn(yesterday), 1);
+    expect(repository.habits.single.countOn(today), 0);
+    expect(
+      tester.widget<Text>(find.text('🔥1')).semanticsLabel,
+      '1 day streak',
+    );
+    await tester.tap(find.text('Read'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 day'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await chooseView('Heatmaps');
+    expect(timeline, findsOneWidget);
+    expect(_timelineDate(today).hitTestable(), findsOneWidget);
+    expect(find.byType(HabitHeatmap), findsOneWidget);
+    await chooseView('Progress bars');
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Last 5 days includes both months when the range crosses a boundary',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 600);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: RecentHabitsTable(
+              today: DateTime(2026, 11, 2),
+              habits: const [Habit(id: 'walk', name: 'Walk')],
+              isActiveOn: (_, _) => true,
+              onOpenHabit: (_) {},
+              onTrackDay: (_, _) {},
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Oct 29 – Nov 2'), findsOneWidget);
+      expect(
+        tester.getRect(find.text('Oct 29 – Nov 2')).right,
+        tester.getRect(find.byType(Table)).right,
+      );
+      for (final day in [29, 30, 31, 1, 2]) {
+        final date = DateTime(2026, day > 2 ? 10 : 11, day);
+        final dateLabel = find.text('$day');
+        final marker = find.byKey(ValueKey('recent-walk-${dayKey(date)}'));
+        expect(
+          tester.getCenter(dateLabel).dx,
+          closeTo(tester.getCenter(marker).dx, 0.1),
+        );
+      }
+      expect(
+        tester.widget<Text>(find.text('2')).style?.color,
+        AppColors.burntOrange,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Today header fits seven dates and only offers Show all', (
     tester,
@@ -2071,10 +2207,10 @@ void main() {
     await tester.tap(track);
     await tester.pumpAndSettle();
     expect(find.text('Stay under 5 times'), findsOneWidget);
-    expect(find.text('100%'), findsOneWidget);
+    expect(find.text('0%'), findsOneWidget);
     await tester.enterText(input, '4');
     await tester.pump();
-    expect(find.text('80%'), findsOneWidget);
+    expect(find.text('20%'), findsOneWidget);
     expect(
       tester
           .widget<LinearProgressIndicator>(
@@ -2084,11 +2220,35 @@ void main() {
             ),
           )
           .value,
-      0.8,
+      closeTo(0.2, 0.001),
     );
     await tester.tap(find.byKey(const Key('tracking-save')));
     await tester.pumpAndSettle();
     expect(repository.habits.single.countOn(today), 4);
+
+    await tester.tap(find.text('View'));
+    await tester.pumpAndSettle();
+    await tester.tap(_viewMenuItem('Last 5 days'));
+    await tester.pumpAndSettle();
+    final marker = find.byKey(ValueKey('recent-soda-${dayKey(today)}'));
+    final ring = find.descendant(
+      of: marker,
+      matching: find.byType(CircularProgressIndicator),
+    );
+    expect(
+      tester.widget<CircularProgressIndicator>(ring).value,
+      closeTo(0.2, 0.001),
+    );
+    await tester.tap(marker);
+    await tester.pumpAndSettle();
+    await tester.enterText(input, '5');
+    await tester.tap(find.byKey(const Key('tracking-save')));
+    await tester.pumpAndSettle();
+    expect(ring, findsNothing);
+    expect(
+      find.descendant(of: marker, matching: find.byIcon(Icons.close_rounded)),
+      findsOneWidget,
+    );
   });
 
   for (final (type, cutoff, initial, expected) in [

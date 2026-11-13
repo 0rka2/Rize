@@ -10,6 +10,7 @@ class TodayTimeline extends StatefulWidget {
     required this.completionForDay,
     required this.onSelectDay,
     required this.onAddHabit,
+    this.showWeekStrip = true,
     super.key,
   });
 
@@ -18,6 +19,7 @@ class TodayTimeline extends StatefulWidget {
   final ({int completed, int active}) Function(DateTime day) completionForDay;
   final ValueChanged<DateTime> onSelectDay;
   final VoidCallback? onAddHabit;
+  final bool showWeekStrip;
 
   @override
   State<TodayTimeline> createState() => _TodayTimelineState();
@@ -186,44 +188,45 @@ class _TodayTimelineState extends State<TodayTimeline> {
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final diameter = (constraints.maxWidth / 7 - 6).clamp(0.0, 36.0);
-            final labelHeight =
-                MediaQuery.textScalerOf(context).scale(12) * 1.3;
-            return SizedBox(
-              height: diameter + labelHeight + 22,
-              child: PageView.builder(
-                key: const Key('today-week-timeline'),
-                controller: _weeks,
-                reverse: true,
-                onPageChanged:
-                    (offset) => setState(() {
-                      _visibleWeekOffset = offset;
-                    }),
-                itemBuilder: (context, weekOffset) {
-                  final start = weekStart(weekOffset);
-                  return Row(
-                    children: [
-                      for (var i = 0; i < 7; i++)
-                        Expanded(
-                          child: _TimelineDay(
-                            day: shiftHabitDay(start, i),
-                            today: widget.today,
-                            selectedDay: selectedDay,
-                            diameter: diameter,
-                            completionForDay: widget.completionForDay,
-                            onSelectDay: widget.onSelectDay,
+        if (widget.showWeekStrip) const SizedBox(height: 10),
+        if (widget.showWeekStrip)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final diameter = (constraints.maxWidth / 7 - 6).clamp(0.0, 36.0);
+              final labelHeight =
+                  MediaQuery.textScalerOf(context).scale(12) * 1.3;
+              return SizedBox(
+                height: diameter + labelHeight + 22,
+                child: PageView.builder(
+                  key: const Key('today-week-timeline'),
+                  controller: _weeks,
+                  reverse: true,
+                  onPageChanged:
+                      (offset) => setState(() {
+                        _visibleWeekOffset = offset;
+                      }),
+                  itemBuilder: (context, weekOffset) {
+                    final start = weekStart(weekOffset);
+                    return Row(
+                      children: [
+                        for (var i = 0; i < 7; i++)
+                          Expanded(
+                            child: _TimelineDay(
+                              day: shiftHabitDay(start, i),
+                              today: widget.today,
+                              selectedDay: selectedDay,
+                              diameter: diameter,
+                              completionForDay: widget.completionForDay,
+                              onSelectDay: widget.onSelectDay,
+                            ),
                           ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            );
-          },
-        ),
+                      ],
+                    );
+                  },
+                ),
+              );
+            },
+          ),
       ],
     );
   }

@@ -1133,13 +1133,7 @@ class _CalendarDayCell extends StatelessWidget {
                   children: [
                     Expanded(
                       child: LinearProgressIndicator(
-                        value:
-                            slip
-                                ? 0
-                                : (isQuit
-                                        ? 1 - amount / threshold
-                                        : amount / threshold)
-                                    .clamp(0, 1),
+                        value: habit.dailyProgressOn(day),
                         minHeight: 3,
                         borderRadius: BorderRadius.circular(2),
                         backgroundColor: (slip ? warning : AppColors.offWhite)

@@ -6,13 +6,25 @@ import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 import 'add_habit_screen.dart';
 import 'habit_detail_screen.dart';
+import 'habit_heatmap.dart';
 import 'habit_icons.dart';
 import 'habit_note_editor.dart';
+import 'recent_habits_table.dart';
 import 'today_timeline.dart';
 import 'unsaved_changes.dart';
 
 String _formatCount(double value) =>
     value == value.truncateToDouble() ? value.toInt().toString() : '$value';
+
+enum _HabitView {
+  progressBars('Progress bars'),
+  heatmaps('Heatmaps'),
+  lastFiveDays('Last 5 days');
+
+  const _HabitView(this.label);
+
+  final String label;
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({required this.repository, super.key});
@@ -32,6 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _trackingEditorOpen = false;
   bool _isLoading = true;
   bool _hasStorageError = false;
+  _HabitView _habitView = _HabitView.progressBars;
 
   @override
   void initState() {
@@ -278,8 +291,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final day = _selectedDay ?? today;
     final isToday = day == today;
     final canTrack = _canTrackTimelineDay(day, today);
+    final showRecentDays = _habitView == _HabitView.lastFiveDays;
     final activeHabits =
         _habits.where((habit) => _isActiveOn(habit, day, today)).toList();
+    final showViewButton = !_isLoading && _habits.isNotEmpty;
 
     return Scaffold(
       body: SafeArea(
@@ -289,9 +304,16 @@ class _HomeScreenState extends State<HomeScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  20,
+                  20,
+                  showViewButton ? 0 : 18,
+                ),
                 sliver: SliverToBoxAdapter(
                   child: TodayTimeline(
+                    key: ValueKey(showRecentDays),
+                    showWeekStrip: !showRecentDays,
                     today: today,
                     selectedDay: day,
                     completionForDay: (date) => _completionForDay(date, today),
@@ -303,6 +325,63 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+              if (showViewButton)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                  sliver: SliverToBoxAdapter(
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: PopupMenuButton<_HabitView>(
+                        tooltip: 'Change habit view',
+                        onSelected:
+                            (view) => setState(() {
+                              if (showRecentDays ||
+                                  view == _HabitView.lastFiveDays) {
+                                _selectedDay = null;
+                              }
+                              _habitView = view;
+                            }),
+                        itemBuilder:
+                            (_) => [
+                              for (final view in _HabitView.values)
+                                CheckedPopupMenuItem(
+                                  value: view,
+                                  checked: _habitView == view,
+                                  child: Text(view.label),
+                                ),
+                            ],
+                        child: Ink(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: ShapeDecoration(
+                            color: AppColors.burntOrange.withValues(
+                              alpha: 0.16,
+                            ),
+                            shape: const StadiumBorder(),
+                          ),
+                          child: const SizedBox(
+                            height: 44,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'View',
+                                  style: TextStyle(
+                                    color: AppColors.burntOrange,
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.expand_more_rounded,
+                                  size: 18,
+                                  color: AppColors.burntOrange,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               if (_hasStorageError)
                 const SliverPadding(
                   padding: EdgeInsets.symmetric(horizontal: 20),
@@ -322,6 +401,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SliverFillRemaining(
                   hasScrollBody: false,
                   child: Center(child: CircularProgressIndicator()),
+                )
+              else if (showRecentDays && _habits.isNotEmpty)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+                  sliver: SliverToBoxAdapter(
+                    child: RecentHabitsTable(
+                      today: today,
+                      habits: _habits,
+                      isActiveOn:
+                          (habit, date) => _isActiveOn(habit, date, today),
+                      onOpenHabit: _openDetails,
+                      onTrackDay: _trackTimelineDay,
+                    ),
+                  ),
                 )
               else if (activeHabits.isEmpty)
                 SliverFillRemaining(
@@ -344,6 +437,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           habit: habit,
                           day: day,
                           isToday: isToday,
+                          showHeatmap: _habitView == _HabitView.heatmaps,
                           onOpen: () => _openDetails(habit),
                           onTrack:
                               canTrack
@@ -403,12 +497,8 @@ class _DailyTrackingSheetState extends State<_DailyTrackingSheet> {
   bool get _hasSavedNoteSlip =>
       _count == _initialCount && _habit.hasNoteSlipOn(widget.today);
   double get _goal => _isYesNo ? 1 : _habit.dailyTrackingThreshold;
-  double get _progress {
-    if (_isQuit && !_habit.hasQuitLimit) {
-      return !_hasSavedNoteSlip && _habit.meetsQuitLimit(_count) ? 1 : 0;
-    }
-    return (_count / _goal).clamp(0, 1);
-  }
+  double get _progress =>
+      _habit.dailyProgressOn(widget.today, draftCount: _count);
 
   @override
   void initState() {
@@ -975,6 +1065,7 @@ class _HabitCard extends StatelessWidget {
     required this.habit,
     required this.day,
     required this.isToday,
+    required this.showHeatmap,
     required this.onOpen,
     required this.onTrack,
   });
@@ -982,6 +1073,7 @@ class _HabitCard extends StatelessWidget {
   final Habit habit;
   final DateTime day;
   final bool isToday;
+  final bool showHeatmap;
   final VoidCallback onOpen;
   final VoidCallback? onTrack;
 
@@ -1024,14 +1116,9 @@ class _HabitCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = Color(habit.colorValue);
     final complete = habit.isCompleteOn(day);
-    final isQuit = habit.type == HabitType.quit;
     final amount = habit.countOn(day);
     final threshold = habit.dailyTrackingThreshold;
-    var fillStrength = complete ? 1.0 : 0.0;
-    if (habit.trackingMode != TrackingMode.yesNo && threshold > 0) {
-      final progress = (amount / threshold).clamp(0.0, 1.0);
-      fillStrength = isQuit ? (complete ? 1 - progress : 0) : progress;
-    }
+    final fillStrength = habit.dailyProgressOn(day);
     return Material(
       color: AppColors.charcoalGrey,
       borderRadius: BorderRadius.circular(22),
@@ -1110,17 +1197,26 @@ class _HabitCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              ExcludeSemantics(
-                child: LinearProgressIndicator(
-                  value: fillStrength,
-                  minHeight: 4,
-                  borderRadius: BorderRadius.circular(2),
-                  backgroundColor: AppColors.coolGrey.withValues(alpha: 0.16),
-                  color: color,
-                  trackGap: 0,
-                  stopIndicatorRadius: 0,
+              if (showHeatmap)
+                HabitHeatmap(
+                  habit: habit,
+                  startDate: shiftHabitDay(day, -179),
+                  endDate: day,
+                  showMonthLabels: false,
+                  showWeekdayLabels: false,
+                )
+              else
+                ExcludeSemantics(
+                  child: LinearProgressIndicator(
+                    value: fillStrength,
+                    minHeight: 4,
+                    borderRadius: BorderRadius.circular(2),
+                    backgroundColor: AppColors.coolGrey.withValues(alpha: 0.16),
+                    color: color,
+                    trackGap: 0,
+                    stopIndicatorRadius: 0,
+                  ),
                 ),
-              ),
             ],
           ),
         ),

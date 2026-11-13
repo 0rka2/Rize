@@ -136,14 +136,32 @@ class Habit {
 
   bool isSlipFreeOn(DateTime day) => countOn(day) == 0 && isCompleteOn(day);
 
+  /// Build progress fills toward the goal. Quit progress shows allowance left.
+  double dailyProgressOn(DateTime day, {double? draftCount}) {
+    final savedCount = countOn(day);
+    final count = draftCount ?? savedCount;
+    if (type == HabitType.quit) {
+      final unchanged = count == savedCount;
+      if ((unchanged && (hasNoteSlipOn(day) || !_hasStartedOn(day))) ||
+          !meetsQuitLimit(count)) {
+        return 0;
+      }
+      return hasQuitLimit ? (1 - count / quitLimit).clamp(0.0, 1.0) : 1;
+    }
+    if (trackingMode == TrackingMode.yesNo) return count > 0 ? 1 : 0;
+    if (target <= 0) return count >= target ? 1 : 0;
+    return (count / target).clamp(0.0, 1.0);
+  }
+
+  bool _hasStartedOn(DateTime day) =>
+      !shiftHabitDay(day, 0).isBefore(
+        shiftHabitDay(startDate ?? DateTime.now(), 0),
+      ) ||
+      dailyCounts.containsKey(dayKey(day));
+
   bool isCompleteOn(DateTime day) {
     if (type == HabitType.quit) {
-      final started = startDate ?? DateTime.now();
-      final startedDay = DateTime(started.year, started.month, started.day);
-      final checkedDay = DateTime(day.year, day.month, day.day);
-      return !isQuitSlipOn(day) &&
-          (!checkedDay.isBefore(startedDay) ||
-              dailyCounts.containsKey(dayKey(day)));
+      return !isQuitSlipOn(day) && _hasStartedOn(day);
     }
     final count = countOn(day);
     if (trackingMode == TrackingMode.yesNo) return count > 0;

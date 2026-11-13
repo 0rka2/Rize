@@ -328,28 +328,11 @@ class _HeatmapDay extends StatelessWidget {
   Widget build(BuildContext context) {
     final inRange = !day.isBefore(startDate) && !day.isAfter(endDate);
     final isFuture = day.isAfter(today);
-    final count = habit.countOn(day);
-    final complete = inRange && !isFuture && habit.isCompleteOn(day);
-    final partialQuit =
-        complete &&
-        habit.type == HabitType.quit &&
-        habit.hasQuitLimit &&
-        count > 0;
-    final partialBuild =
-        inRange &&
-        !isFuture &&
-        count > 0 &&
-        !complete &&
-        habit.type != HabitType.quit &&
-        habit.target > 0;
+    final progress = inRange && !isFuture ? habit.dailyProgressOn(day) : 0.0;
     final mark = inRange ? repeatMarks[dayKey(day)] : null;
     final fill =
-        partialQuit
-            ? color.withValues(alpha: 1 - count / habit.quitLimit)
-            : complete
-            ? color
-            : partialBuild
-            ? color.withValues(alpha: count / habit.target)
+        progress > 0
+            ? color.withValues(alpha: progress)
             : mark == RepeatMark.filled
             ? color.withValues(alpha: 0.18)
             : AppColors.carbon;
@@ -366,7 +349,7 @@ class _HeatmapDay extends StatelessWidget {
           color:
               hasNote
                   ? AppColors.offWhite.withValues(alpha: 0.8)
-                  : complete && !partialQuit
+                  : progress == 1
                   ? fill
                   : Colors.transparent,
         ),
