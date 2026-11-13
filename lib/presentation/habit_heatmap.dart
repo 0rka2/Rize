@@ -382,6 +382,7 @@ class _HeatmapDay extends StatelessWidget {
 class HabitProgressIndicators extends StatelessWidget {
   const HabitProgressIndicators({
     required this.streakLabel,
+    required this.goalTitle,
     required this.goalLabel,
     required this.goalReached,
     required this.color,
@@ -389,61 +390,108 @@ class HabitProgressIndicators extends StatelessWidget {
   });
 
   final String streakLabel;
+  final String goalTitle;
   final String goalLabel;
   final bool goalReached;
   final Color color;
 
   @override
-  Widget build(BuildContext context) => Wrap(
-    spacing: 8,
-    runSpacing: 8,
-    children: [
-      _ProgressPill(
-        icon: Icons.local_fire_department_outlined,
-        label: streakLabel,
-        color: color,
-      ),
-      _ProgressPill(
-        icon: goalReached ? Icons.check_rounded : Icons.repeat_rounded,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      const spacing = 10.0;
+      final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
+      final minCardWidth = 144 * textScale;
+      final streakCard = _ProgressCard(
+        icon: Icons.local_fire_department_rounded,
+        title: 'Current streak',
+        value: streakLabel,
+        color: AppColors.burntOrange,
+      );
+      final goalCard = _ProgressCard(
+        icon: goalReached ? Icons.check_rounded : Icons.track_changes_rounded,
         iconLabel: goalReached ? 'Repeat goal reached' : null,
-        label: goalLabel,
+        title: goalTitle,
+        value: goalLabel,
         color: color,
-      ),
-    ],
+      );
+
+      if (constraints.maxWidth < minCardWidth * 2 + spacing) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          spacing: spacing,
+          children: [streakCard, goalCard],
+        );
+      }
+      return IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          spacing: spacing,
+          children: [Expanded(child: streakCard), Expanded(child: goalCard)],
+        ),
+      );
+    },
   );
 }
 
-class _ProgressPill extends StatelessWidget {
-  const _ProgressPill({
+class _ProgressCard extends StatelessWidget {
+  const _ProgressCard({
     required this.icon,
-    required this.label,
+    required this.title,
+    required this.value,
     required this.color,
     this.iconLabel,
   });
 
   final IconData icon;
   final String? iconLabel;
-  final String label;
+  final String title;
+  final String value;
   final Color color;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(
-      color: color.withValues(alpha: 0.14),
-      borderRadius: BorderRadius.circular(24),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 16, color: color, semanticLabel: iconLabel),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(label, style: Theme.of(context).textTheme.labelLarge),
-        ),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.charcoalGrey,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.coolGrey.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: color.withValues(alpha: 0.14),
+            child: Icon(icon, size: 19, color: color, semanticLabel: iconLabel),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              spacing: 2,
+              children: [
+                Text(
+                  title,
+                  style: textTheme.labelMedium?.copyWith(
+                    color: AppColors.coolGrey,
+                  ),
+                ),
+                Text(
+                  value,
+                  style: textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 String _monthLabel(

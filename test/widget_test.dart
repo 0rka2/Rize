@@ -388,10 +388,10 @@ void main() {
     );
   });
 
-  testWidgets('detail pills update after a check-in and a repeat edit', (
+  testWidgets('detail cards update after a check-in and a repeat edit', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     final today = DateUtils.dateOnly(DateTime.now());
@@ -420,36 +420,49 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final pills = find.byType(HabitProgressIndicators);
-    Finder pillIcon(IconData icon) =>
-        find.descendant(of: pills, matching: find.byIcon(icon));
+    final cards = find.byType(HabitProgressIndicators);
+    Finder cardIcon(IconData icon) =>
+        find.descendant(of: cards, matching: find.byIcon(icon));
 
-    expect(find.text('0 days'), findsOneWidget);
-    expect(find.text('0 of 1 this week'), findsOneWidget);
-    expect(pillIcon(Icons.repeat_rounded), findsOneWidget);
+    expect(find.text('Habit detail'), findsOneWidget);
+    expect(tester.widget<AppBar>(find.byType(AppBar)).centerTitle, isTrue);
+    expect(find.text('Current streak'), findsOneWidget);
+    expect(find.text('Weekly goal'), findsOneWidget);
+    final flameIcon = cardIcon(Icons.local_fire_department_rounded);
+    final targetIcon = cardIcon(Icons.track_changes_rounded);
+    final streak = tester.getCenter(flameIcon);
+    final goal = tester.getCenter(targetIcon);
+    final history = tester.getRect(find.text('History'));
+    expect(streak.dy, closeTo(goal.dy, 0.01));
+    expect(goal.dx, greaterThan(streak.dx));
+    expect(tester.getBottomLeft(cards).dy, lessThan(history.top));
     expect(
-      tester.widget<Icon>(pillIcon(Icons.local_fire_department_outlined)).color,
-      color,
+      history.bottom,
+      lessThan(tester.getTopLeft(find.byType(HabitHeatmap)).dy),
     );
+    expect(find.text('0 days'), findsOneWidget);
+    expect(find.text('0 / 1 day'), findsOneWidget);
+    expect(tester.widget<Icon>(targetIcon).color, color);
 
     final todayCell = find.byKey(ValueKey('calendar-day-${dayKey(today)}'));
     await tester.tap(todayCell);
     await tester.pumpAndSettle();
     expect(find.text('1 day'), findsOneWidget);
-    expect(find.text('1 of 1 this week'), findsOneWidget);
-    expect(pillIcon(Icons.check_rounded), findsOneWidget);
+    expect(find.text('1 / 1 day'), findsOneWidget);
+    expect(cardIcon(Icons.check_rounded), findsOneWidget);
 
     await tester.tap(find.byTooltip('Edit habit'));
     await tester.pumpAndSettle();
-    expect(find.text('1 of 7 this month'), findsOneWidget);
-    expect(pillIcon(Icons.repeat_rounded), findsOneWidget);
+    expect(find.text('Monthly goal'), findsOneWidget);
+    expect(find.text('1 / 7 days'), findsOneWidget);
+    expect(targetIcon, findsOneWidget);
 
     await tester.tap(find.byTooltip('Previous month'));
     await tester.pumpAndSettle();
-    expect(find.text('1 of 7 this month'), findsOneWidget);
+    expect(find.text('1 / 7 days'), findsOneWidget);
   });
 
-  testWidgets('detail pills show the configured repeat schedule', (
+  testWidgets('detail cards show the configured repeat schedule', (
     tester,
   ) async {
     const buildHabit = Habit(id: 'read', name: 'Read');
@@ -463,7 +476,7 @@ void main() {
         'Every 5 days',
       ),
       (quitHabit, 'Slip-free days'),
-      (quitHabit.copyWith(quitLimit: 2), 'Days within the limit'),
+      (quitHabit.copyWith(quitLimit: 2), 'Everyday'),
     ];
 
     for (final (habit, label) in schedules) {
@@ -480,26 +493,28 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      expect(find.text('Repeat'), findsOneWidget);
       expect(find.text(label), findsOneWidget);
     }
   });
 
-  testWidgets('detail pills wrap at larger text sizes on narrow screens', (
+  testWidgets('detail cards stack at larger text sizes on narrow screens', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(320, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     const streakLabel = '2 days';
-    const repeatLabel = 'Days within the limit';
+    const repeatLabel = 'Mon, Tue, Wed, Thu, Fri, Sat';
     await tester.pumpWidget(
       MaterialApp(
         home: MediaQuery.withClampedTextScaling(
           minScaleFactor: 2,
-          child: const Align(
-            alignment: Alignment.topLeft,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 22),
             child: HabitProgressIndicators(
               streakLabel: streakLabel,
+              goalTitle: 'Repeat',
               goalLabel: repeatLabel,
               goalReached: false,
               color: Color(0xFFA4E635),
@@ -1687,6 +1702,7 @@ void main() {
         scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
+      expect(find.text('Notes'), findsOneWidget);
       expect(find.text('No notes yet'), findsOneWidget);
       await tester.tap(addNote);
       await tester.pumpAndSettle();
@@ -1776,6 +1792,7 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
 
+    expect(find.text('Notes'), findsOneWidget);
     expect(tester.widget<Text>(find.byKey(const Key('notes-count'))).data, '4');
     expect(find.text('Today note'), findsOneWidget);
     expect(find.text('Two days ago'), findsOneWidget);

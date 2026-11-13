@@ -233,16 +233,21 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final color = Color(_habit.colorValue);
+    final textTheme = Theme.of(context).textTheme;
+    final sectionHeading = textTheme.titleLarge?.copyWith(
+      fontWeight: FontWeight.w700,
+    );
     final recentNotes = _sortedNotes().take(3).toList();
     final showEmptyNotes = !_loadingNotes && !_noteError && recentNotes.isEmpty;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final heatmapStart = _heatmapStart(today);
     final streak = _habit.calendarDayStreak(today);
-    final (repeatLabel, quotaReached) = _repeatProgress(_habit, today);
+    final (goalTitle, goalLabel, goalReached) = _repeatProgress(_habit, today);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Habit'),
+        centerTitle: true,
+        title: const Text('Habit detail'),
         actions: [
           IconButton(
             tooltip: 'Edit habit',
@@ -273,16 +278,17 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
                     children: [
                       Text(
                         _habit.name,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
+                        style: textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                       if (_habit.description.isNotEmpty) ...[
                         const SizedBox(height: 3),
                         Text(
                           _habit.description,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: AppColors.coolGrey),
+                          style: textTheme.bodyMedium?.copyWith(
+                            color: AppColors.coolGrey,
+                          ),
                         ),
                       ],
                     ],
@@ -290,7 +296,20 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 16),
+            HabitProgressIndicators(
+              streakLabel: '$streak ${streak == 1 ? 'day' : 'days'}',
+              goalTitle: goalTitle,
+              goalLabel: goalLabel,
+              goalReached: goalReached,
+              color: color,
+            ),
+            const SizedBox(height: 20),
+            Semantics(
+              header: true,
+              child: Text('History', style: sectionHeading),
+            ),
+            const SizedBox(height: 8),
             _HeatmapCard(
               habit: _habit,
               noteDays: _notes.keys.toSet(),
@@ -299,13 +318,6 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               onSelectDay: _selectDay,
             ),
             const SizedBox(height: 12),
-            HabitProgressIndicators(
-              streakLabel: '$streak ${streak == 1 ? 'day' : 'days'}',
-              goalLabel: repeatLabel,
-              goalReached: quotaReached,
-              color: color,
-            ),
-            const SizedBox(height: 18),
             _CalendarCard(
               habit: _habit,
               noteDays: _notes.keys.toSet(),
@@ -325,6 +337,33 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               },
             ),
             const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: Semantics(
+                    header: true,
+                    child: Text('Notes', style: sectionHeading),
+                  ),
+                ),
+                if (!showEmptyNotes) ...[
+                  Text(
+                    '${_notes.length}',
+                    key: const Key('notes-count'),
+                    style: textTheme.titleMedium?.copyWith(
+                      color: AppColors.coolGrey,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  TextButton.icon(
+                    onPressed: _openAllNotes,
+                    icon: const Icon(Icons.chevron_right_rounded),
+                    label: const Text('All notes'),
+                    iconAlignment: IconAlignment.end,
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(17),
               decoration: BoxDecoration(
@@ -336,44 +375,18 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 10,
                 children: [
                   if (showEmptyNotes)
                     _EmptyNotes(onAdd: _addNote)
-                  else
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Notes',
-                            style: Theme.of(context).textTheme.titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                        Text(
-                          '${_notes.length}',
-                          key: const Key('notes-count'),
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(color: AppColors.coolGrey),
-                        ),
-                        const SizedBox(width: 10),
-                        TextButton.icon(
-                          onPressed: _openAllNotes,
-                          icon: const Icon(Icons.chevron_right_rounded),
-                          label: const Text('All notes'),
-                          iconAlignment: IconAlignment.end,
-                        ),
-                      ],
-                    ),
-                  if (_loadingNotes)
+                  else if (_loadingNotes)
                     const Center(child: CircularProgressIndicator())
                   else
-                    for (final entry in recentNotes) ...[
-                      const SizedBox(height: 10),
+                    for (final entry in recentNotes)
                       _NotePreviewCard(
                         entry: entry,
                         onTap: () => _editNoteForDay(_dateFromKey(entry.key)),
                       ),
-                    ],
                 ],
               ),
             ),
@@ -1199,28 +1212,35 @@ class _CalendarDayCell extends StatelessWidget {
   }
 }
 
-(String, bool) _repeatProgress(Habit habit, DateTime today) {
+(String, String, bool) _repeatProgress(Habit habit, DateTime today) {
   switch (habit.goalPeriod) {
     case GoalPeriod.none:
-      if (habit.type == HabitType.build) return ('No repeat goal', false);
-      return (habit.hasQuitLimit ? 'Everyday' : 'Slip-free days', false);
+      if (habit.type == HabitType.build) {
+        return ('Repeat', 'No repeat goal', false);
+      }
+      return (
+        'Repeat',
+        habit.hasQuitLimit ? 'Everyday' : 'Slip-free days',
+        false,
+      );
     case GoalPeriod.daily:
-      return ('Every day', false);
+      return ('Repeat', 'Every day', false);
     case GoalPeriod.specificDays:
-      return (specificDaysLabel(habit.buildRepeat.weekdays), false);
+      return ('Repeat', specificDaysLabel(habit.buildRepeat.weekdays), false);
     case GoalPeriod.everyFewDays:
-      return ('Every ${habit.buildRepeat.gapDays} days', false);
+      return ('Repeat', 'Every ${habit.buildRepeat.gapDays} days', false);
     case GoalPeriod.weekly:
     case GoalPeriod.monthly:
       final weekly = habit.goalPeriod == GoalPeriod.weekly;
       final target = weekly ? habit.weeklyGoalTarget : habit.monthlyGoalTarget;
-      final unit = weekly ? 'week' : 'month';
+      final title = weekly ? 'Weekly goal' : 'Monthly goal';
       final progress = habit.successfulDaysInPeriod(
         today,
         habit.goalPeriod,
         today: today,
       );
-      return ('$progress of $target this $unit', progress >= target);
+      final unit = target == 1 ? 'day' : 'days';
+      return (title, '$progress / $target $unit', progress >= target);
   }
 }
 
