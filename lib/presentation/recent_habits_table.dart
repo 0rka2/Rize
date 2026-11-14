@@ -5,6 +5,7 @@ import '../theme/app_colors.dart';
 import 'habit_icons.dart';
 
 const _tileRadius = 8.0;
+const _pastDayOpacity = 0.6;
 
 class RecentHabitsTable extends StatelessWidget {
   const RecentHabitsTable({
@@ -13,6 +14,7 @@ class RecentHabitsTable extends StatelessWidget {
     required this.isActiveOn,
     required this.onOpenHabit,
     required this.onTrackDay,
+    this.emptyMessage = 'No habits',
     super.key,
   });
 
@@ -21,6 +23,7 @@ class RecentHabitsTable extends StatelessWidget {
   final bool Function(Habit, DateTime) isActiveOn;
   final ValueChanged<Habit> onOpenHabit;
   final void Function(Habit, DateTime) onTrackDay;
+  final String emptyMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -91,7 +94,10 @@ class RecentHabitsTable extends StatelessWidget {
                         ),
                       ),
                       for (final day in days)
-                        _dateHeading(context, day, tileSize),
+                        Opacity(
+                          opacity: day == today ? 1 : _pastDayOpacity,
+                          child: _dateHeading(context, day, tileSize),
+                        ),
                     ],
                   ),
                   for (final habit in habits)
@@ -101,6 +107,11 @@ class RecentHabitsTable extends StatelessWidget {
             },
           ),
         ),
+        if (habits.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: Text(emptyMessage),
+          ),
       ],
     );
   }
@@ -210,12 +221,16 @@ class RecentHabitsTable extends StatelessWidget {
           ),
         ),
         for (final day in days)
-          _DayMarker(
-            habit: habit,
-            day: day,
-            size: tileSize,
-            repeat: repeat[dayKey(day)],
-            onTap: isActiveOn(habit, day) ? () => onTrackDay(habit, day) : null,
+          Opacity(
+            opacity: day == today ? 1 : _pastDayOpacity,
+            child: _DayMarker(
+              habit: habit,
+              day: day,
+              size: tileSize,
+              repeat: repeat[dayKey(day)],
+              onTap:
+                  isActiveOn(habit, day) ? () => onTrackDay(habit, day) : null,
+            ),
           ),
       ],
     );

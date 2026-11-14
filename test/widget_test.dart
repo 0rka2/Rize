@@ -819,6 +819,163 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
   });
 
+  testWidgets(
+    'Today category filter combines with dates, completion and views',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final today = DateUtils.dateOnly(DateTime.now());
+      final yesterday = shiftHabitDay(today, -1);
+      const custom = (
+        id: 'outdoor',
+        name: 'Weekly outdoor conditioning programme',
+        emoji: '🌳',
+      );
+      final fitness = presetHabitCategories.firstWhere(
+        (item) => item.id == 'fitness',
+      );
+      final run = Habit(
+        id: 'run',
+        name: 'Run',
+        startDate: today,
+        dailyCounts: {dayKey(today): 1},
+        categories: [custom, fitness],
+      );
+      final stretch = Habit(
+        id: 'stretch',
+        name: 'Stretch',
+        startDate: yesterday,
+        categories: [fitness],
+      );
+      final read = Habit(id: 'read', name: 'Read', startDate: yesterday);
+      final repository =
+          _MemoryHabitRepository()..habits = [run, stretch, read];
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      final categoryFilters = find.byKey(const Key('today-category-filters'));
+      final viewButton = find.byTooltip('Change habit view');
+      Finder categoryOption(String label) => find.byWidgetPredicate(
+        (widget) => widget is FilterChip && widget.tooltip == label,
+      );
+
+      Future<void> openMenu(Finder button) async {
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> chooseOption(Finder option) async {
+        await tester.tap(option);
+        await tester.pumpAndSettle();
+      }
+
+      expect(find.text('Read'), findsOneWidget);
+      final fitnessOption = categoryOption('Fitness');
+      final customOption = categoryOption(custom.name);
+      expect(categoryOption('All categories'), findsNothing);
+      expect(tester.widget<FilterChip>(fitnessOption).selected, isFalse);
+      expect(
+        tester.getTopLeft(fitnessOption).dx,
+        lessThan(tester.getTopLeft(customOption).dx),
+      );
+      expect(
+        tester.getTopRight(customOption).dx,
+        greaterThan(tester.getTopRight(categoryFilters).dx),
+      );
+      await tester.drag(categoryFilters, const Offset(-240, 0));
+      await tester.pumpAndSettle();
+      await chooseOption(customOption.hitTestable());
+      expect(tester.widget<FilterChip>(customOption).selected, isTrue);
+      expect(
+        tester.getCenter(categoryFilters).dy,
+        tester.getCenter(viewButton).dy,
+      );
+      expect(
+        tester.getTopLeft(categoryFilters).dx,
+        greaterThan(tester.getTopRight(viewButton).dx),
+      );
+      expect(tester.getTopRight(categoryFilters).dx, lessThanOrEqualTo(300));
+      expect(tester.takeException(), isNull);
+      expect(find.text('Run'), findsOneWidget);
+      expect(find.text('Stretch'), findsNothing);
+      expect(find.text('Read'), findsNothing);
+      expect(_timelineProgress(tester, today), closeTo(1 / 3, 0.001));
+
+      await _selectEarlierTimelineDate(tester, yesterday);
+      final emptyMessage = find.text('No matching habits in ${custom.name}');
+      expect(emptyMessage, findsOneWidget);
+      await tester.tap(_timelineDate(today));
+      await tester.pumpAndSettle();
+
+      final completionButton = find.byTooltip('Filter habits');
+      Finder completionOption(String label) => find.widgetWithText(
+        CheckedPopupMenuItem<HabitCompletionFilter>,
+        label,
+      );
+      await openMenu(completionButton);
+      await chooseOption(completionOption('Not done'));
+      expect(emptyMessage, findsOneWidget);
+      await openMenu(completionButton);
+      await chooseOption(completionOption('Done'));
+      expect(find.text('Run'), findsOneWidget);
+
+      await openMenu(viewButton);
+      await chooseOption(_viewMenuItem('Heatmaps'));
+      expect(find.byType(HabitHeatmap), findsOneWidget);
+      expect(find.text('Run'), findsOneWidget);
+      await openMenu(viewButton);
+      await chooseOption(_viewMenuItem('Last 5 days'));
+      expect(find.byType(RecentHabitsTable), findsOneWidget);
+      await openMenu(completionButton);
+      await chooseOption(completionOption('All'));
+      expect(find.text('Run'), findsOneWidget);
+      expect(find.text('Stretch'), findsNothing);
+      expect(find.text('Read'), findsNothing);
+
+      expect(tester.widget<FilterChip>(customOption).selected, isTrue);
+      await chooseOption(customOption.hitTestable());
+      expect(tester.widget<FilterChip>(customOption).selected, isFalse);
+      expect(find.text('Stretch'), findsOneWidget);
+      expect(find.text('Read'), findsOneWidget);
+
+      await tester.drag(categoryFilters, const Offset(240, 0));
+      await tester.pumpAndSettle();
+
+      await chooseOption(fitnessOption);
+      expect(find.text('Run'), findsOneWidget);
+      expect(find.text('Stretch'), findsOneWidget);
+      expect(find.text('Read'), findsNothing);
+
+      await tester.drag(categoryFilters, const Offset(-240, 0));
+      await tester.pumpAndSettle();
+      await chooseOption(customOption.hitTestable());
+      expect(tester.widget<FilterChip>(fitnessOption).selected, isTrue);
+      expect(tester.widget<FilterChip>(customOption).selected, isTrue);
+      expect(find.text('Run'), findsOneWidget);
+      expect(find.text('Stretch'), findsOneWidget);
+      expect(find.text('Read'), findsNothing);
+
+      repository.habits = [
+        run.copyWith(categories: [custom]),
+        read,
+      ];
+      final refresh =
+          tester
+              .state<RefreshIndicatorState>(find.byType(RefreshIndicator))
+              .show();
+      await tester.pumpAndSettle();
+      await refresh;
+      expect(fitnessOption, findsNothing);
+      expect(tester.widget<FilterChip>(customOption).selected, isTrue);
+      expect(find.text('Read'), findsNothing);
+      await chooseOption(customOption.hitTestable());
+      expect(find.text('Read'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('Last 5 days keeps a fixed range and tracks the tapped date', (
     tester,
   ) async {
@@ -928,7 +1085,7 @@ void main() {
     },
   );
 
-  testWidgets('Today header fits seven dates and only offers Show all', (
+  testWidgets('Today header fits seven dates and all completion filters', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(320, 600);
@@ -939,6 +1096,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     final today = DateTime(2027, 1, 7);
     var selectedDay = today;
+    var filter = HabitCompletionFilter.all;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -952,6 +1110,8 @@ void main() {
                     completionForDay: (day) => (completed: 2, active: 3),
                     onSelectDay: (day) => setState(() => selectedDay = day),
                     onAddHabit: () {},
+                    filter: filter,
+                    onFilterChanged: (value) => setState(() => filter = value),
                   ),
             ),
           ),
@@ -994,15 +1154,29 @@ void main() {
     await tester.tap(_timelineDate(tomorrow), warnIfMissed: false);
     expect(selectedDay, today);
 
-    await tester.tap(find.text('All'));
-    await tester.pumpAndSettle();
-    final menu = find.byType(CheckedPopupMenuItem<String>);
-    expect(menu, findsOneWidget);
-    expect(tester.widget<CheckedPopupMenuItem<String>>(menu).checked, isTrue);
-    await tester.tap(menu);
-    await tester.pumpAndSettle();
-    expect(find.text('Show all'), findsNothing);
-    expect(selectedDay, today);
+    final menu = find.byType(CheckedPopupMenuItem<HabitCompletionFilter>);
+    for (final choice in [
+      HabitCompletionFilter.done,
+      HabitCompletionFilter.notDone,
+      HabitCompletionFilter.all,
+    ]) {
+      await tester.tap(find.byTooltip('Filter habits'));
+      await tester.pumpAndSettle();
+      final items = tester
+          .widgetList<CheckedPopupMenuItem<HabitCompletionFilter>>(menu);
+      expect(items.map((item) => item.value), HabitCompletionFilter.values);
+      expect(items.singleWhere((item) => item.checked).value, filter);
+      await tester.tap(
+        find.widgetWithText(
+          CheckedPopupMenuItem<HabitCompletionFilter>,
+          choice.label,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(choice.label), findsOneWidget);
+      expect(tester.getCenter(find.text('Today')).dx, closeTo(160, 1));
+      expect(selectedDay, today);
+    }
 
     final timeline = find.byKey(const Key('today-week-timeline'));
     await tester.drag(timeline, const Offset(235, 0));
@@ -1040,6 +1214,185 @@ void main() {
     expect(selectedDay, today);
     expect(_timelineDate(today).hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Today filters active habits by the selected date across views', (
+    tester,
+  ) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final yesterday = shiftHabitDay(today, -1);
+    final earlier = shiftHabitDay(today, -2);
+    final repository =
+        _MemoryHabitRepository()
+          ..habits = [
+            Habit(
+              id: 'read',
+              name: 'Read',
+              startDate: today,
+              dailyCounts: {dayKey(today): 1},
+            ),
+            Habit(
+              id: 'water',
+              name: 'Drink water',
+              target: 2,
+              startDate: earlier,
+              dailyCounts: {
+                dayKey(today): 1,
+                dayKey(yesterday): 1,
+                dayKey(earlier): 2,
+              },
+            ),
+            Habit(
+              id: 'soda',
+              name: 'Limit soda',
+              type: HabitType.quit,
+              startDate: earlier,
+              trackingMode: TrackingMode.yesNo,
+              noteSlipDays: {dayKey(today), dayKey(yesterday)},
+            ),
+          ];
+    await tester.pumpWidget(RizeApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    Future<void> filterBy(String label) async {
+      await tester.tap(find.byTooltip('Filter habits'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(CheckedPopupMenuItem<HabitCompletionFilter>, label),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> switchView(String label) async {
+      await tester.tap(find.byTooltip('Change habit view'));
+      await tester.pumpAndSettle();
+      await tester.tap(_viewMenuItem(label));
+      await tester.pumpAndSettle();
+    }
+
+    expect(find.text('Read'), findsOneWidget);
+    expect(find.text('Drink water'), findsOneWidget);
+    expect(find.text('Limit soda'), findsOneWidget);
+    await filterBy('Done');
+    expect(find.text('Read'), findsOneWidget);
+    expect(find.text('Drink water'), findsNothing);
+    expect(find.text('Limit soda'), findsNothing);
+    expect(_timelineProgress(tester, today), closeTo(1 / 3, 0.001));
+
+    await _selectEarlierTimelineDate(tester, yesterday);
+    expect(find.text('No done habits on this date'), findsOneWidget);
+    await filterBy('Not done');
+    expect(find.text('Read'), findsNothing);
+    expect(find.text('Drink water'), findsOneWidget);
+    expect(find.text('Limit soda'), findsOneWidget);
+
+    final waterCard =
+        find
+            .ancestor(
+              of: find.text('Drink water'),
+              matching: find.byType(InkWell),
+            )
+            .first;
+    await tester.tap(
+      find.descendant(
+        of: waterCard,
+        matching: find.byTooltip('Track this date'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(repository.habits[1].countOn(yesterday), 2);
+    expect(find.text('Drink water'), findsNothing);
+    expect(find.text('Limit soda'), findsOneWidget);
+    expect(_timelineProgress(tester, yesterday), 0.5);
+
+    await _selectEarlierTimelineDate(tester, earlier);
+    expect(find.text('No unfinished habits on this date'), findsOneWidget);
+    await switchView('Heatmaps');
+    expect(find.byTooltip('Filter habits'), findsOneWidget);
+    expect(find.text('No unfinished habits on this date'), findsOneWidget);
+    await switchView('Last 5 days');
+    final recentTable = find.byType(RecentHabitsTable);
+    final table = find.descendant(
+      of: recentTable,
+      matching: find.byType(Table),
+    );
+    final filterMenu = find.byTooltip('Filter habits');
+    expect(
+      find.descendant(of: filterMenu, matching: find.text('Not done')),
+      findsOneWidget,
+    );
+    expect(find.text('Read'), findsNothing);
+    expect(find.text('Drink water'), findsOneWidget);
+    expect(find.text('Limit soda'), findsOneWidget);
+
+    final header = tester.widget<Table>(table).children.first;
+    expect(header.children, hasLength(6));
+    final headingOpacities = header.children.skip(1).cast<Opacity>();
+    expect(headingOpacities.map((heading) => heading.opacity), [
+      0.6,
+      0.6,
+      0.6,
+      0.6,
+      1,
+    ]);
+    final todayHeading = headingOpacities.last.child as Center;
+    expect((todayHeading.child as Container).decoration, isNotNull);
+
+    Finder waterCell(DateTime date) =>
+        find.byKey(ValueKey('recent-water-${dayKey(date)}'));
+    expect(
+      tester
+          .widget<Opacity>(
+            find
+                .ancestor(
+                  of: waterCell(yesterday),
+                  matching: find.byType(Opacity),
+                )
+                .first,
+          )
+          .opacity,
+      0.6,
+    );
+    expect(
+      tester
+          .widget<Opacity>(
+            find
+                .ancestor(of: waterCell(today), matching: find.byType(Opacity))
+                .first,
+          )
+          .opacity,
+      1,
+    );
+    // Yesterday is already done. Editing an earlier date must leave the row visible.
+    final oldest = shiftHabitDay(today, -4);
+    expect(tester.widget<InkWell>(waterCell(oldest)).onTap, isNull);
+    await tester.tap(find.byKey(ValueKey('recent-soda-${dayKey(yesterday)}')));
+    await tester.pumpAndSettle();
+    expect(repository.habits[2].isCompleteOn(yesterday), isTrue);
+    expect(find.text('Limit soda'), findsOneWidget);
+    await tester.tap(waterCell(today));
+    await tester.pumpAndSettle();
+    expect(find.text('Drink water'), findsNothing);
+    await tester.tap(find.byKey(ValueKey('recent-soda-${dayKey(today)}')));
+    await tester.pumpAndSettle();
+    expect(find.text('No unfinished habits today'), findsOneWidget);
+    expect(tester.widget<Table>(table).children.single.children, hasLength(6));
+
+    await filterBy('Done');
+    expect(find.text('Read'), findsOneWidget);
+    expect(find.text('Drink water'), findsOneWidget);
+    expect(find.text('Limit soda'), findsOneWidget);
+    await switchView('Progress bars');
+    expect(
+      find.descendant(
+        of: find.byTooltip('Filter habits'),
+        matching: find.text('Done'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Read'), findsOneWidget);
+    expect(find.text('Drink water'), findsOneWidget);
+    expect(find.text('Limit soda'), findsOneWidget);
   });
 
   testWidgets(

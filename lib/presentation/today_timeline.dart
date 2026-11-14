@@ -3,6 +3,16 @@ import 'package:flutter/material.dart';
 import '../domain/habit.dart';
 import '../theme/app_colors.dart';
 
+enum HabitCompletionFilter {
+  all('All'),
+  done('Done'),
+  notDone('Not done');
+
+  const HabitCompletionFilter(this.label);
+
+  final String label;
+}
+
 class TodayTimeline extends StatefulWidget {
   const TodayTimeline({
     required this.today,
@@ -10,6 +20,8 @@ class TodayTimeline extends StatefulWidget {
     required this.completionForDay,
     required this.onSelectDay,
     required this.onAddHabit,
+    required this.filter,
+    required this.onFilterChanged,
     this.showWeekStrip = true,
     super.key,
   });
@@ -19,6 +31,8 @@ class TodayTimeline extends StatefulWidget {
   final ({int completed, int active}) Function(DateTime day) completionForDay;
   final ValueChanged<DateTime> onSelectDay;
   final VoidCallback? onAddHabit;
+  final HabitCompletionFilter filter;
+  final ValueChanged<HabitCompletionFilter> onFilterChanged;
   final bool showWeekStrip;
 
   @override
@@ -84,54 +98,19 @@ class _TodayTimelineState extends State<TodayTimeline> {
           '${dates.formatDecimal(end.day)}, ${dates.formatYear(end)}';
     }
     final textTheme = Theme.of(context).textTheme;
+    const sideWidth = 88.0;
+    final titleStyle =
+        isCurrentWeek
+            ? textTheme.headlineMedium
+            : MediaQuery.sizeOf(context).width < 360
+            ? textTheme.titleMedium
+            : textTheme.titleLarge;
 
     return Column(
       children: [
         Row(
           children: [
-            SizedBox(
-              width: 64,
-              child: PopupMenuButton<String>(
-                tooltip: 'Filter habits',
-                itemBuilder:
-                    (_) => const [
-                      CheckedPopupMenuItem(
-                        value: 'all',
-                        checked: true,
-                        child: Text('Show all'),
-                      ),
-                    ],
-                child: Ink(
-                  height: 44,
-                  decoration: ShapeDecoration(
-                    color: AppColors.burntOrange.withValues(alpha: 0.16),
-                    shape: const StadiumBorder(),
-                  ),
-                  child: const Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 6),
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'All',
-                              style: TextStyle(color: AppColors.burntOrange),
-                            ),
-                            Icon(
-                              Icons.expand_more_rounded,
-                              size: 18,
-                              color: AppColors.burntOrange,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            SizedBox(width: sideWidth, child: _filterMenu()),
             Expanded(
               child: TextButton(
                 onPressed: _returnToToday,
@@ -149,13 +128,10 @@ class _TodayTimelineState extends State<TodayTimeline> {
                       Text(
                         title,
                         textAlign: TextAlign.center,
-                        style: (isCurrentWeek
-                                ? textTheme.headlineMedium
-                                : textTheme.titleLarge)
-                            ?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.7,
-                            ),
+                        style: titleStyle?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.7,
+                        ),
                       ),
                       if (subtitle != null)
                         Text(
@@ -171,7 +147,7 @@ class _TodayTimelineState extends State<TodayTimeline> {
               ),
             ),
             SizedBox(
-              width: 64,
+              width: sideWidth,
               child: Align(
                 alignment: AlignmentDirectional.centerEnd,
                 child: IconButton.filled(
@@ -230,6 +206,50 @@ class _TodayTimelineState extends State<TodayTimeline> {
       ],
     );
   }
+
+  Widget _filterMenu() => PopupMenuButton<HabitCompletionFilter>(
+    tooltip: 'Filter habits',
+    constraints: const BoxConstraints(minWidth: 180, maxWidth: 240),
+    onSelected: widget.onFilterChanged,
+    itemBuilder:
+        (_) => [
+          for (final filter in HabitCompletionFilter.values)
+            CheckedPopupMenuItem<HabitCompletionFilter>(
+              value: filter,
+              checked: widget.filter == filter,
+              child: Text(filter.label),
+            ),
+        ],
+    child: Ink(
+      height: 44,
+      decoration: ShapeDecoration(
+        color: AppColors.burntOrange.withValues(alpha: 0.16),
+        shape: const StadiumBorder(),
+      ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.filter.label,
+                  style: const TextStyle(color: AppColors.burntOrange),
+                ),
+                const Icon(
+                  Icons.expand_more_rounded,
+                  size: 18,
+                  color: AppColors.burntOrange,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _TimelineDay extends StatelessWidget {

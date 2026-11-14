@@ -6,6 +6,7 @@ import '../domain/habit.dart';
 import '../domain/habit_category.dart';
 import '../theme/app_colors.dart';
 import 'add_habit_screen.dart';
+import 'habit_category_picker.dart';
 import 'habit_detail_screen.dart';
 import 'habit_heatmap.dart';
 import 'habit_icons.dart';
@@ -46,6 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _hasStorageError = false;
   _HabitView _habitView = _HabitView.progressBars;
+  HabitCompletionFilter _completionFilter = HabitCompletionFilter.all;
+  final Set<String> _selectedCategoryIds = {};
 
   @override
   void initState() {
@@ -58,7 +61,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final habits = await widget.repository.loadHabits();
       if (!mounted) return;
       setState(() {
-        _habits = habits;
+        _replaceHabits(habits);
         _isLoading = false;
         _hasStorageError = false;
       });
@@ -292,7 +295,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       if (!mounted) return false;
       setState(() {
-        _habits = habits;
+        _replaceHabits(habits);
         _hasStorageError = false;
       });
       return true;
@@ -300,6 +303,13 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() => _hasStorageError = true);
       return false;
     }
+  }
+
+  void _replaceHabits(List<Habit> habits) {
+    _habits = habits;
+    _selectedCategoryIds.retainAll(
+      habits.expand((habit) => habit.categories.map((category) => category.id)),
+    );
   }
 
   bool _isActiveOn(Habit habit, DateTime day, DateTime today) {
@@ -341,13 +351,44 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final today = DateUtils.dateOnly(DateTime.now());
-    final day = _selectedDay ?? today;
+    final showRecentDays = _habitView == _HabitView.lastFiveDays;
+    final day = showRecentDays ? today : _selectedDay ?? today;
     final isToday = day == today;
     final canTrack = _canTrackTimelineDay(day, today);
-    final showRecentDays = _habitView == _HabitView.lastFiveDays;
     final activeHabits =
         _habits.where((habit) => _isActiveOn(habit, day, today)).toList();
-    final showViewButton = !_isLoading && _habits.isNotEmpty;
+    final completionHabits = switch (_completionFilter) {
+      HabitCompletionFilter.all => showRecentDays ? _habits : activeHabits,
+      HabitCompletionFilter.done =>
+        activeHabits.where((habit) => habit.isCompleteOn(day)).toList(),
+      HabitCompletionFilter.notDone =>
+        activeHabits.where((habit) => !habit.isCompleteOn(day)).toList(),
+    };
+    final assignedCategories = {
+      for (final habit in _habits)
+        for (final category in habit.categories) category.id: category,
+    };
+    final categories =
+        assignedCategories.values.toList()..sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
+    final visibleHabits =
+        _selectedCategoryIds.isEmpty
+            ? completionHabits
+            : completionHabits
+                .where(
+                  (habit) => habit.categories.any(
+                    (category) => _selectedCategoryIds.contains(category.id),
+                  ),
+                )
+                .toList();
+    final categoryEmptyMessage = switch (_selectedCategoryIds.length) {
+      0 => null,
+      1 =>
+        'No matching habits in ${assignedCategories[_selectedCategoryIds.single]!.name}',
+      _ => 'No matching habits in the selected categories',
+    };
+    final showHabitMenus = !_isLoading && _habits.isNotEmpty;
 
     return Scaffold(
       body: SafeArea(
@@ -361,7 +402,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   20,
                   20,
                   20,
-                  showViewButton ? 0 : 18,
+                  showHabitMenus ? 0 : 18,
                 ),
                 sliver: SliverToBoxAdapter(
                   child: TodayTimeline(
@@ -369,6 +410,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     showWeekStrip: !showRecentDays,
                     today: today,
                     selectedDay: day,
+                    filter: _completionFilter,
+                    onFilterChanged:
+                        (filter) => setState(() => _completionFilter = filter),
                     completionForDay: (date) => _completionForDay(date, today),
                     onSelectDay:
                         (date) => setState(() {
@@ -378,60 +422,71 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-              if (showViewButton)
+              if (showHabitMenus)
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
                   sliver: SliverToBoxAdapter(
-                    child: Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: PopupMenuButton<_HabitView>(
-                        tooltip: 'Change habit view',
-                        onSelected:
-                            (view) => setState(() {
-                              if (showRecentDays ||
-                                  view == _HabitView.lastFiveDays) {
-                                _selectedDay = null;
-                              }
-                              _habitView = view;
-                            }),
-                        itemBuilder:
-                            (_) => [
-                              for (final view in _HabitView.values)
-                                CheckedPopupMenuItem(
-                                  value: view,
-                                  checked: _habitView == view,
-                                  child: Text(view.label),
-                                ),
-                            ],
-                        child: Ink(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: ShapeDecoration(
-                            color: AppColors.burntOrange.withValues(
-                              alpha: 0.16,
-                            ),
-                            shape: const StadiumBorder(),
-                          ),
-                          child: const SizedBox(
-                            height: 44,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'View',
-                                  style: TextStyle(
-                                    color: AppColors.burntOrange,
+                    child: Row(
+                      children: [
+                        PopupMenuButton<_HabitView>(
+                          tooltip: 'Change habit view',
+                          onSelected:
+                              (view) => setState(() {
+                                if (showRecentDays ||
+                                    view == _HabitView.lastFiveDays) {
+                                  _selectedDay = null;
+                                }
+                                _habitView = view;
+                              }),
+                          itemBuilder:
+                              (_) => [
+                                for (final view in _HabitView.values)
+                                  CheckedPopupMenuItem(
+                                    value: view,
+                                    checked: _habitView == view,
+                                    child: Text(view.label),
                                   ),
-                                ),
-                                Icon(
-                                  Icons.expand_more_rounded,
-                                  size: 18,
-                                  color: AppColors.burntOrange,
-                                ),
                               ],
+                          child: const _HabitMenuLabel('View'),
+                        ),
+                        if (categories.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              key: const Key('today-category-filters'),
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                spacing: 8,
+                                children: [
+                                  for (final category in categories)
+                                    _CategoryFilterChip(
+                                      label: category.name,
+                                      icon: HabitCategoryIcon(
+                                        category: category,
+                                      ),
+                                      selected: _selectedCategoryIds.contains(
+                                        category.id,
+                                      ),
+                                      onSelected: (selected) {
+                                        setState(() {
+                                          if (selected) {
+                                            _selectedCategoryIds.add(
+                                              category.id,
+                                            );
+                                          } else {
+                                            _selectedCategoryIds.remove(
+                                              category.id,
+                                            );
+                                          }
+                                        });
+                                      },
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ),
+                        ],
+                      ],
                     ),
                   ),
                 ),
@@ -461,7 +516,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   sliver: SliverToBoxAdapter(
                     child: RecentHabitsTable(
                       today: today,
-                      habits: _habits,
+                      habits: visibleHabits,
+                      emptyMessage:
+                          categoryEmptyMessage ??
+                          (_completionFilter == HabitCompletionFilter.done
+                              ? 'No done habits today'
+                              : 'No unfinished habits today'),
                       isActiveOn:
                           (habit, date) => _isActiveOn(habit, date, today),
                       onOpenHabit: _openDetails,
@@ -469,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 )
-              else if (activeHabits.isEmpty)
+              else if (activeHabits.isEmpty && _selectedCategoryIds.isEmpty)
                 SliverFillRemaining(
                   hasScrollBody: false,
                   child:
@@ -477,13 +537,25 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? _EmptyState(onAddHabit: _openAddHabit)
                           : const Center(child: Text('No habits on this date')),
                 )
+              else if (visibleHabits.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Text(
+                      categoryEmptyMessage ??
+                          (_completionFilter == HabitCompletionFilter.done
+                              ? 'No done habits on this date'
+                              : 'No unfinished habits on this date'),
+                    ),
+                  ),
+                )
               else
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
                   sliver: SliverList.builder(
-                    itemCount: activeHabits.length,
+                    itemCount: visibleHabits.length,
                     itemBuilder: (context, index) {
-                      final habit = activeHabits[index];
+                      final habit = visibleHabits[index];
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _HabitCard(
@@ -507,6 +579,80 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _CategoryFilterChip extends StatelessWidget {
+  const _CategoryFilterChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final Widget icon;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilterChip(
+      tooltip: label,
+      avatar: icon,
+      label: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 144),
+        child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
+      iconTheme: IconThemeData(
+        color: selected ? AppColors.burntOrange : AppColors.offWhite,
+      ),
+      labelStyle: TextStyle(
+        color: selected ? AppColors.burntOrange : AppColors.offWhite,
+      ),
+      backgroundColor: AppColors.charcoalGrey,
+      selectedColor: AppColors.burntOrange.withValues(alpha: 0.16),
+      shape: const StadiumBorder(),
+      showCheckmark: false,
+      selected: selected,
+      onSelected: onSelected,
+    );
+  }
+}
+
+class _HabitMenuLabel extends StatelessWidget {
+  const _HabitMenuLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Ink(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: ShapeDecoration(
+        color: AppColors.burntOrange.withValues(alpha: 0.16),
+        shape: const StadiumBorder(),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.burntOrange),
+            ),
+          ),
+          const Icon(
+            Icons.expand_more_rounded,
+            size: 18,
+            color: AppColors.burntOrange,
+          ),
+        ],
       ),
     );
   }
