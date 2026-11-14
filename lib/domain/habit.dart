@@ -1,3 +1,5 @@
+import 'habit_category.dart';
+
 enum HabitType { build, quit }
 
 enum TrackingMode { yesNo, count, measure }
@@ -48,6 +50,7 @@ class HabitSettings {
     required this.weeklyGoalTarget,
     required this.monthlyGoalTarget,
     this.buildRepeat = defaultBuildRepeat,
+    this.categories = const [],
   });
 
   final String name;
@@ -64,6 +67,7 @@ class HabitSettings {
   final int weeklyGoalTarget;
   final int monthlyGoalTarget;
   final BuildRepeatOptions buildRepeat;
+  final List<HabitCategory> categories;
 }
 
 class Habit {
@@ -86,6 +90,7 @@ class Habit {
     this.startDate,
     this.dailyCounts = const {},
     this.noteSlipDays = const {},
+    this.categories = const [],
   });
 
   final String id;
@@ -106,6 +111,7 @@ class Habit {
   final DateTime? startDate;
   final Map<String, num> dailyCounts;
   final Set<String> noteSlipDays;
+  final List<HabitCategory> categories;
 
   double countOn(DateTime day) => (dailyCounts[dayKey(day)] ?? 0).toDouble();
 
@@ -469,6 +475,7 @@ class Habit {
     DateTime? startDate,
     Map<String, num>? dailyCounts,
     Set<String>? noteSlipDays,
+    List<HabitCategory>? categories,
   }) => Habit(
     id: id,
     name: name ?? this.name,
@@ -488,6 +495,7 @@ class Habit {
     startDate: startDate ?? this.startDate,
     dailyCounts: dailyCounts ?? this.dailyCounts,
     noteSlipDays: noteSlipDays ?? this.noteSlipDays,
+    categories: categories ?? this.categories,
   );
 
   Habit withSettings(HabitSettings settings) => copyWith(
@@ -506,6 +514,7 @@ class Habit {
     weeklyGoalTarget: settings.weeklyGoalTarget,
     monthlyGoalTarget: settings.monthlyGoalTarget,
     buildRepeat: settings.buildRepeat,
+    categories: settings.categories,
   );
 }
 

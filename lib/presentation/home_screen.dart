@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../data/habit_repository.dart';
 import '../domain/habit.dart';
+import '../domain/habit_category.dart';
 import '../theme/app_colors.dart';
 import 'add_habit_screen.dart';
 import 'habit_detail_screen.dart';
@@ -40,7 +41,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Habit> _habits = [];
   DateTime? _selectedDay;
-  Future<void> _trackingWrites = Future<void>.value();
+  Future<void> _habitWrites = Future<void>.value();
   bool _trackingEditorOpen = false;
   bool _isLoading = true;
   bool _hasStorageError = false;
@@ -71,32 +72,70 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openAddHabit() async {
-    final settings = await Navigator.of(context).push<HabitSettings>(
-      MaterialPageRoute(builder: (_) => const AddHabitScreen()),
-    );
-    if (settings == null || !mounted) return;
-
-    final habit = Habit(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      name: settings.name,
-      startDate: DateTime.now(),
-    ).withSettings(settings);
-    await _saveHabits([..._habits, habit]);
+    await _openHabitEditor();
   }
 
-  Future<Habit?> _editHabit(Habit habit) async {
-    final settings = await Navigator.of(context).push<HabitSettings>(
-      MaterialPageRoute(builder: (_) => AddHabitScreen(habit: habit)),
+  Future<Habit?> _openHabitEditor({Habit? habit}) async {
+    Habit? savedHabit;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder:
+            (_) => AddHabitScreen(
+              habit: habit,
+              loadCustomCategories: widget.repository.loadCustomCategories,
+              onSave: (settings, customCategories) async {
+                savedHabit = await _saveHabitSettings(
+                  habit,
+                  settings,
+                  customCategories,
+                );
+                return savedHabit != null;
+              },
+            ),
+      ),
     );
-    if (settings == null || !mounted) return null;
+    return savedHabit;
+  }
 
-    final updatedHabit = habit.withSettings(settings);
-    final updated =
-        _habits
-            .map((item) => item.id == habit.id ? updatedHabit : item)
-            .toList();
-    final saved = await _saveHabits(updated);
-    return saved ? updatedHabit : null;
+  Future<Habit?> _saveHabitSettings(
+    Habit? habit,
+    HabitSettings settings,
+    List<HabitCategory>? customCategories,
+  ) => _queueHabitWrite(() async {
+    if (!mounted) return null;
+    final now = DateTime.now();
+    final current =
+        habit == null
+            ? Habit(
+              id: now.microsecondsSinceEpoch.toString(),
+              name: settings.name,
+              startDate: now,
+            )
+            : _habits.firstWhere((item) => item.id == habit.id);
+    final updated = current.withSettings(settings);
+    var habits = [
+      for (final item in _habits) item.id == updated.id ? updated : item,
+      if (habit == null) updated,
+    ];
+    if (customCategories != null) {
+      final catalog = [...presetHabitCategories, ...customCategories];
+      habits = [
+        for (final item in habits)
+          item.copyWith(categories: _orderCategories(item.categories, catalog)),
+      ];
+    }
+    final saved = await _saveHabits(habits, customCategories: customCategories);
+    return saved ? habits.firstWhere((item) => item.id == updated.id) : null;
+  });
+
+  List<HabitCategory> _orderCategories(
+    List<HabitCategory> assigned,
+    List<HabitCategory> catalog,
+  ) {
+    final assignedIds = assigned.map((category) => category.id).toSet();
+    return List.unmodifiable(
+      catalog.where((category) => assignedIds.contains(category.id)),
+    );
   }
 
   Future<void> _openDetails(Habit habit) async {
@@ -111,25 +150,28 @@ class _HomeScreenState extends State<HomeScreen> {
                     _habits.firstWhere((item) => item.id == habit.id),
                     day,
                   ),
-              onSetStartDate: (day) async {
-                final current = _habits.firstWhere(
-                  (item) => item.id == habit.id,
-                );
-                final updatedHabit = current.copyWith(startDate: day);
-                final updated =
-                    _habits
-                        .map(
-                          (item) => item.id == habit.id ? updatedHabit : item,
-                        )
-                        .toList();
-                final saved = await _saveHabits(updated);
-                return saved ? updatedHabit : null;
-              },
+              onSetStartDate:
+                  (day) => _queueHabitWrite(() async {
+                    if (!mounted) return null;
+                    final current = _habits.firstWhere(
+                      (item) => item.id == habit.id,
+                    );
+                    final updatedHabit = current.copyWith(startDate: day);
+                    final updated =
+                        _habits
+                            .map(
+                              (item) =>
+                                  item.id == habit.id ? updatedHabit : item,
+                            )
+                            .toList();
+                    final saved = await _saveHabits(updated);
+                    return saved ? updatedHabit : null;
+                  }),
               onSetSlipDay:
                   (day, isSlip) => _setNoteSlip(habit.id, day, isSlip),
               onEdit:
-                  () => _editHabit(
-                    _habits.firstWhere((item) => item.id == habit.id),
+                  () => _openHabitEditor(
+                    habit: _habits.firstWhere((item) => item.id == habit.id),
                   ),
             ),
       ),
@@ -178,7 +220,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } catch (_) {
         // The tracking sheet remains usable if loading the optional note fails.
       }
-      await _trackingWrites;
+      await _habitWrites;
       if (!mounted) return null;
 
       final habit = _habits.firstWhere((item) => item.id == id);
@@ -219,24 +261,35 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<({Habit? habit, bool openEditor})> _saveTrackingChange(
     String id,
     Habit? Function(Habit) change,
-  ) {
-    final write = _trackingWrites.then((_) async {
-      if (!mounted) return (habit: null, openEditor: false);
-      final current = _habits.firstWhere((habit) => habit.id == id);
-      final updated = change(current);
-      if (updated == null) return (habit: null, openEditor: true);
-      final saved = await _saveHabits([
-        for (final habit in _habits) habit.id == id ? updated : habit,
-      ]);
-      return (habit: saved ? updated : null, openEditor: false);
-    });
-    _trackingWrites = write.then<void>((_) {});
+  ) => _queueHabitWrite(() async {
+    if (!mounted) return (habit: null, openEditor: false);
+    final current = _habits.firstWhere((habit) => habit.id == id);
+    final updated = change(current);
+    if (updated == null) return (habit: null, openEditor: true);
+    final saved = await _saveHabits([
+      for (final habit in _habits) habit.id == id ? updated : habit,
+    ]);
+    return (habit: saved ? updated : null, openEditor: false);
+  });
+
+  Future<T> _queueHabitWrite<T>(Future<T> Function() action) {
+    final write = _habitWrites.then((_) => action());
+    _habitWrites = write.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
     return write;
   }
 
-  Future<bool> _saveHabits(List<Habit> habits) async {
+  Future<bool> _saveHabits(
+    List<Habit> habits, {
+    List<HabitCategory>? customCategories,
+  }) async {
     try {
-      await widget.repository.saveHabits(habits);
+      await widget.repository.saveHabits(
+        habits,
+        customCategories: customCategories,
+      );
       if (!mounted) return false;
       setState(() {
         _habits = habits;

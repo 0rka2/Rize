@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../data/habit_repository.dart';
 import '../domain/habit.dart';
 import '../theme/app_colors.dart';
+import 'habit_category_picker.dart';
 import 'habit_heatmap.dart';
 import 'habit_icons.dart';
 import 'habit_note_editor.dart';
@@ -296,6 +297,24 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
                 ),
               ],
             ),
+            if (_habit.categories.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final category in _habit.categories)
+                    Chip(
+                      avatar: HabitCategoryIcon(category: category),
+                      label: Text(
+                        category.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
             HabitProgressIndicators(
               streakLabel: '$streak ${streak == 1 ? 'day' : 'days'}',

@@ -1,16 +1,26 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../domain/habit.dart';
+import '../domain/habit_category.dart';
 import '../theme/app_colors.dart';
+import 'habit_category_picker.dart';
 import 'habit_icons.dart';
 import 'repeat_picker_screen.dart';
 import 'unsaved_changes.dart';
 
 class AddHabitScreen extends StatefulWidget {
-  const AddHabitScreen({this.habit, super.key});
+  const AddHabitScreen({
+    this.habit,
+    required this.loadCustomCategories,
+    required this.onSave,
+    super.key,
+  });
 
   final Habit? habit;
+  final Future<List<HabitCategory>> Function() loadCustomCategories;
+  final Future<bool> Function(HabitSettings, List<HabitCategory>?) onSave;
 
   @override
   State<AddHabitScreen> createState() => _AddHabitScreenState();
@@ -58,6 +68,12 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   late int _monthlyGoalTarget;
   late BuildRepeatOptions _buildRepeat;
   late final List<Object> _initialValues;
+  late List<HabitCategory> _categories;
+  List<HabitCategory>? _initialCustomCategories;
+  List<HabitCategory>? _customCategories;
+  bool _loadingCategories = false;
+  bool _saving = false;
+  bool _saveFailed = false;
 
   List<Object> get _values => [
     _nameController.text,
@@ -77,12 +93,19 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   ];
 
   bool get _hasUnsavedChanges {
+    if (!listEquals(_categories, widget.habit?.categories ?? const []) ||
+        _customCategoriesChanged) {
+      return true;
+    }
     final values = _values;
     for (var i = 0; i < values.length; i++) {
       if (values[i] != _initialValues[i]) return true;
     }
     return false;
   }
+
+  bool get _customCategoriesChanged =>
+      !listEquals(_customCategories, _initialCustomCategories);
 
   @override
   void initState() {
@@ -115,6 +138,7 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     _weeklyGoalTarget = habit?.weeklyGoalTarget ?? 1;
     _monthlyGoalTarget = habit?.monthlyGoalTarget ?? 1;
     _buildRepeat = habit?.buildRepeat ?? defaultBuildRepeat;
+    _categories = habit?.categories ?? const [];
     _initialValues = _values;
   }
 
@@ -128,7 +152,8 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
+    if (_saving) return;
     final name = _nameController.text.trim();
     final target = double.tryParse(_targetController.text.trim());
     final quitLimit = double.tryParse(_quitLimitController.text.trim());
@@ -153,7 +178,11 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
       return;
     }
 
-    Navigator.of(context).pop(
+    setState(() {
+      _saving = true;
+      _saveFailed = false;
+    });
+    final saved = await widget.onSave(
       HabitSettings(
         name: name,
         description: _descriptionController.text.trim(),
@@ -175,8 +204,19 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
         weeklyGoalTarget: _weeklyGoalTarget,
         monthlyGoalTarget: _monthlyGoalTarget,
         buildRepeat: _buildRepeat,
+        categories: _categories,
       ),
+      _customCategoriesChanged ? _customCategories : null,
     );
+    if (!mounted) return;
+    if (saved) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _saveFailed = true;
+    });
   }
 
   String? _dailyAmountError(double? amount, {required bool isQuit}) {
@@ -217,8 +257,9 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
   Widget build(BuildContext context) => UnsavedChangesGuard(
     color: Color(_colorValue),
     hasUnsavedChanges: () => _hasUnsavedChanges,
+    isSaving: () => _saving,
     onSave: _save,
-    child: _buildForm(context),
+    child: AbsorbPointer(absorbing: _saving, child: _buildForm(context)),
   );
 
   Widget _buildForm(BuildContext context) {
@@ -472,22 +513,67 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 24),
+                  _label('Categories'),
+                  ListTile(
+                    key: const Key('habit-categories'),
+                    tileColor: AppColors.charcoalGrey,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(
+                        color: AppColors.coolGrey.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    title: Text(
+                      _categories.isEmpty
+                          ? 'None'
+                          : _categories
+                              .map((category) => category.name)
+                              .join(', '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing:
+                        _loadingCategories
+                            ? const SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                            : const Icon(
+                              Icons.chevron_right_rounded,
+                              color: AppColors.coolGrey,
+                            ),
+                    onTap: _loadingCategories ? null : _chooseCategories,
+                  ),
                 ],
               ),
             ),
+            if (_saveFailed)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 22),
+                child: Text(
+                  'Could not save the habit. Try again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.burntOrange),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(22, 8, 22, 18),
               child: SizedBox(
                 width: double.infinity,
                 height: 54,
                 child: FilledButton(
-                  onPressed: _save,
+                  onPressed: _saving ? null : _save,
                   style: FilledButton.styleFrom(
                     backgroundColor: accent,
                     foregroundColor: AppColors.carbon,
                   ),
                   child: Text(
-                    widget.habit == null ? 'Save habit' : 'Save changes',
+                    _saving
+                        ? 'Saving…'
+                        : widget.habit == null
+                        ? 'Save habit'
+                        : 'Save changes',
                   ),
                 ),
               ),
@@ -579,6 +665,41 @@ class _AddHabitScreenState extends State<AddHabitScreen> {
       _goalPeriod = selection.$1;
       _weeklyGoalTarget = selection.$2;
       _monthlyGoalTarget = selection.$3;
+    });
+  }
+
+  Future<void> _chooseCategories() async {
+    if (_customCategories == null) {
+      setState(() => _loadingCategories = true);
+      try {
+        final categories = await widget.loadCustomCategories();
+        if (!mounted) return;
+        _initialCustomCategories = categories;
+        _customCategories = categories;
+      } catch (_) {
+        if (mounted && !_saving) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not load categories. Try again.'),
+            ),
+          );
+        }
+        return;
+      } finally {
+        if (mounted) setState(() => _loadingCategories = false);
+      }
+    }
+    if (_saving || ModalRoute.of(context)?.isCurrent != true) return;
+    final selection = await showHabitCategoryPicker(
+      context,
+      selected: _categories,
+      customCategories: _customCategories!,
+      color: Color(_colorValue),
+    );
+    if (selection == null || !mounted) return;
+    setState(() {
+      _categories = selection.categories;
+      _customCategories = selection.customCategories;
     });
   }
 

@@ -4,10 +4,11 @@ import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 
 import '../domain/habit.dart';
+import '../domain/habit_category.dart';
 
 class HabitRepository {
   static const _databaseName = 'rize.db';
-  static const _databaseVersion = 8;
+  static const _databaseVersion = 9;
   static const _createNoteSlips = '''
     CREATE TABLE note_slips (
       habit_id TEXT NOT NULL,
@@ -81,6 +82,7 @@ class HabitRepository {
           )
         ''');
         await database.execute(_createNoteSlips);
+        await _createCategories(database);
       },
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -176,17 +178,67 @@ class HabitRepository {
         if (oldVersion < 8) {
           await database.execute(_createNoteSlips);
         }
+        if (oldVersion < 9) {
+          await _createCategories(database);
+        }
       },
     );
   }
 
+  static Future<void> _createCategories(DatabaseExecutor database) async {
+    await database.execute('''
+      CREATE TABLE categories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL UNIQUE,
+        emoji TEXT,
+        position INTEGER NOT NULL
+      )
+    ''');
+    await database.execute('''
+      CREATE TABLE habit_categories (
+        habit_id TEXT NOT NULL,
+        category_id TEXT NOT NULL,
+        PRIMARY KEY (habit_id, category_id),
+        FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE,
+        FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
+      )
+    ''');
+    final batch = database.batch();
+    for (final (index, category) in presetHabitCategories.indexed) {
+      batch.insert('categories', _categoryValues(category, index));
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<List<HabitCategory>> loadCustomCategories() async {
+    final database = await _db;
+    final rows = await database.query(
+      'categories',
+      where: 'emoji IS NOT NULL',
+      orderBy: 'position',
+    );
+    return rows.map(_categoryFromRow).toList(growable: false);
+  }
+
   Future<List<Habit>> loadHabits() async {
     final database = await _db;
-    final habitRows = await database.query('habits', orderBy: 'rowid');
-    final checkInRows = await database.query('check_ins');
-    final slipRows = await database.query('note_slips');
+    return database.transaction(_loadHabits);
+  }
+
+  Future<List<Habit>> _loadHabits(Transaction transaction) async {
+    final habitRows = await transaction.query('habits', orderBy: 'rowid');
+    final checkInRows = await transaction.query('check_ins');
+    final slipRows = await transaction.query('note_slips');
+    final categoryRows = await transaction.rawQuery('''
+      SELECT habit_categories.habit_id, categories.*
+      FROM habit_categories
+      JOIN categories ON categories.id = habit_categories.category_id
+      ORDER BY categories.position
+    ''');
     final countsByHabit = <String, Map<String, num>>{};
     final slipsByHabit = <String, Set<String>>{};
+    final categoriesByHabit = <String, List<HabitCategory>>{};
 
     for (final row in checkInRows) {
       final habitId = row['habit_id'] as String;
@@ -197,6 +249,11 @@ class HabitRepository {
       slipsByHabit
           .putIfAbsent(row['habit_id'] as String, () => <String>{})
           .add(row['day'] as String);
+    }
+    for (final row in categoryRows) {
+      categoriesByHabit
+          .putIfAbsent(row['habit_id'] as String, () => [])
+          .add(_categoryFromRow(row));
     }
 
     return habitRows
@@ -247,20 +304,33 @@ class HabitRepository {
                     : DateTime.parse(row['start_date'] as String),
             dailyCounts: countsByHabit[row['id']] ?? const <String, double>{},
             noteSlipDays: slipsByHabit[row['id']] ?? const {},
+            categories: List.unmodifiable(categoriesByHabit[row['id']] ?? []),
           ),
         )
         .toList();
   }
 
-  Future<void> saveHabits(List<Habit> habits) async {
+  Future<void> saveHabits(
+    List<Habit> habits, {
+    List<HabitCategory>? customCategories,
+  }) async {
     final database = await _db;
     await database.transaction((transaction) async {
+      if (customCategories != null) {
+        await _saveCustomCategories(transaction, customCategories);
+      }
       final existingRows = await transaction.query('habits', columns: ['id']);
       final savedSlips = <String, Set<String>>{};
       for (final row in await transaction.query('note_slips')) {
         savedSlips
             .putIfAbsent(row['habit_id'] as String, () => <String>{})
             .add(row['day'] as String);
+      }
+      final savedCategoryIds = <String, Set<String>>{};
+      for (final row in await transaction.query('habit_categories')) {
+        savedCategoryIds
+            .putIfAbsent(row['habit_id'] as String, () => <String>{})
+            .add(row['category_id'] as String);
       }
       final existingIds =
           existingRows.map((row) => row['id'] as String).toSet();
@@ -288,6 +358,12 @@ class HabitRepository {
             ..._habitValues(habit),
           });
         }
+
+        await _saveHabitCategories(
+          transaction,
+          habit,
+          savedCategoryIds[habit.id] ?? const {},
+        );
 
         final previousSlips = savedSlips[habit.id] ?? const <String>{};
         for (final day in previousSlips.difference(habit.noteSlipDays)) {
@@ -344,6 +420,75 @@ class HabitRepository {
       }
     });
   }
+
+  static Future<void> _saveCustomCategories(
+    Transaction transaction,
+    List<HabitCategory> categories,
+  ) async {
+    final rows = await transaction.query(
+      'categories',
+      where: 'emoji IS NOT NULL',
+    );
+    final existingIds = rows.map((row) => row['id'] as String).toSet();
+    final incomingIds = categories.map((category) => category.id).toSet();
+    for (final id in existingIds.difference(incomingIds)) {
+      await transaction.delete('categories', where: 'id = ?', whereArgs: [id]);
+    }
+    for (final (index, category) in categories.indexed) {
+      final position = presetHabitCategories.length + index;
+      if (existingIds.contains(category.id)) {
+        await transaction.update(
+          'categories',
+          {'position': position},
+          where: 'id = ?',
+          whereArgs: [category.id],
+        );
+      } else {
+        await transaction.insert(
+          'categories',
+          _categoryValues(category, position),
+        );
+      }
+    }
+  }
+
+  static Future<void> _saveHabitCategories(
+    Transaction transaction,
+    Habit habit,
+    Set<String> previousIds,
+  ) async {
+    final categoryIds = habit.categories.map((category) => category.id).toSet();
+    for (final id in previousIds.difference(categoryIds)) {
+      await transaction.delete(
+        'habit_categories',
+        where: 'habit_id = ? AND category_id = ?',
+        whereArgs: [habit.id, id],
+      );
+    }
+    for (final id in categoryIds.difference(previousIds)) {
+      await transaction.insert('habit_categories', {
+        'habit_id': habit.id,
+        'category_id': id,
+      });
+    }
+  }
+
+  static Map<String, Object?> _categoryValues(
+    HabitCategory category,
+    int position,
+  ) => {
+    'id': category.id,
+    'name': category.name,
+    'name_key': category.name.toLowerCase(),
+    'emoji': category.emoji,
+    'position': position,
+  };
+
+  static HabitCategory _categoryFromRow(Map<String, Object?> row) => (
+    id: row['id'] as String,
+    name: row['name'] as String,
+    emoji: row['emoji'] as String?,
+  );
 
   Future<Map<String, String>> loadNotes(String habitId) async {
     final database = await _db;

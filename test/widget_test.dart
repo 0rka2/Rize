@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:rize/data/habit_repository.dart';
 import 'package:rize/domain/habit.dart';
+import 'package:rize/domain/habit_category.dart';
 import 'package:rize/main.dart';
+import 'package:rize/presentation/add_habit_screen.dart';
 import 'package:rize/presentation/habit_heatmap.dart';
 import 'package:rize/presentation/habit_detail_screen.dart';
 import 'package:rize/presentation/home_screen.dart';
@@ -13,6 +15,7 @@ import 'package:rize/theme/app_colors.dart';
 
 class _MemoryHabitRepository extends HabitRepository {
   List<Habit> habits = [];
+  List<HabitCategory> customCategories = [];
   final Map<String, String> notes = {};
   bool failSavingNotes = false;
   bool failSavingHabits = false;
@@ -22,10 +25,17 @@ class _MemoryHabitRepository extends HabitRepository {
   Future<List<Habit>> loadHabits() async => habits;
 
   @override
-  Future<void> saveHabits(List<Habit> habits) async {
+  Future<List<HabitCategory>> loadCustomCategories() async => customCategories;
+
+  @override
+  Future<void> saveHabits(
+    List<Habit> habits, {
+    List<HabitCategory>? customCategories,
+  }) async {
     if (saveDelay != Duration.zero) await Future<void>.delayed(saveDelay);
     if (failSavingHabits) throw StateError('Unable to save habits');
     this.habits = habits;
+    if (customCategories != null) this.customCategories = customCategories;
   }
 
   @override
@@ -77,7 +87,207 @@ Future<void> _selectEarlierTimelineDate(
   await tester.pumpAndSettle();
 }
 
+Future<void> _openHabitCategories(WidgetTester tester) async {
+  final row = find.byKey(const Key('habit-categories'));
+  await tester.scrollUntilVisible(
+    row,
+    250,
+    scrollable: find.descendant(
+      of: find.byType(AddHabitScreen),
+      matching: find.byType(Scrollable),
+    ).first,
+  );
+  await _tapCategoryControl(tester, row);
+}
+
+Future<void> _tapCategoryControl(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
+}
+
+void _setCategoryTestViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(420, 850);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
+
 void main() {
+  testWidgets(
+    'habit editor saves multiple presets and clears them from details',
+    (tester) async {
+      _setCategoryTestViewport(tester);
+      final repository = _MemoryHabitRepository();
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+      await _tapCategoryControl(tester, find.text('Add your first habit'));
+      await tester.enterText(find.byKey(const Key('habit-name')), 'Run');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await _openHabitCategories(tester);
+      await _tapCategoryControl(tester, find.text('Fitness'));
+      await _tapCategoryControl(tester, find.text('Morning'));
+      await _tapCategoryControl(tester, find.text('Save'));
+      expect(find.text('Fitness, Morning'), findsOneWidget);
+      await _tapCategoryControl(tester, find.text('Save habit'));
+      expect(repository.habits.single.categories.map((item) => item.id), [
+        'fitness',
+        'morning',
+      ]);
+
+      await _tapCategoryControl(tester, find.text('Run'));
+      expect(find.widgetWithText(Chip, 'Fitness'), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'Morning'), findsOneWidget);
+      await _tapCategoryControl(tester, find.byTooltip('Edit habit'));
+      await _openHabitCategories(tester);
+      await _tapCategoryControl(tester, find.text('Fitness'));
+      await _tapCategoryControl(tester, find.text('Morning'));
+      await _tapCategoryControl(tester, find.text('Save'));
+      expect(find.text('None'), findsOneWidget);
+      await _tapCategoryControl(tester, find.text('Save changes'));
+      expect(repository.habits.single.categories, isEmpty);
+      expect(find.widgetWithText(Chip, 'Fitness'), findsNothing);
+      expect(find.widgetWithText(Chip, 'Morning'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'custom category drafts can be discarded and retried after a failed save',
+    (tester) async {
+      _setCategoryTestViewport(tester);
+      final repository =
+          _MemoryHabitRepository()
+            ..habits = [const Habit(id: 'read', name: 'Read')];
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+      await _tapCategoryControl(tester, find.text('Read'));
+      final name = find.byKey(const Key('category-name'));
+
+      Future<void> draftCategory() async {
+        await _tapCategoryControl(tester, find.byTooltip('Edit habit'));
+        await _openHabitCategories(tester);
+        await _tapCategoryControl(tester, find.text('Create your own'));
+        final save = find.widgetWithText(FilledButton, 'Save').last;
+        expect(tester.widget<FilledButton>(save).onPressed, isNull);
+        await tester.enterText(name, ' fItNeSs ');
+        await tester.pumpAndSettle();
+        expect(find.text('This category already exists.'), findsOneWidget);
+        expect(tester.widget<FilledButton>(save).onPressed, isNull);
+        await tester.enterText(name, ' Garden ');
+        await _tapCategoryControl(tester, find.byTooltip('Choose an emoji'));
+        await _tapCategoryControl(tester, find.byTooltip('Seedling'));
+        await _tapCategoryControl(tester, save);
+        expect(
+          tester
+              .widget<FilterChip>(find.widgetWithText(FilterChip, 'Garden'))
+              .selected,
+          isTrue,
+        );
+        await _tapCategoryControl(tester, find.text('Save'));
+      }
+
+      await draftCategory();
+      await _tapCategoryControl(tester, find.byTooltip('Close'));
+      await _tapCategoryControl(tester, find.text('Discard'));
+      expect(repository.customCategories, isEmpty);
+      expect(find.widgetWithText(Chip, 'Garden'), findsNothing);
+
+      await draftCategory();
+      repository.failSavingHabits = true;
+      await _tapCategoryControl(tester, find.text('Save changes'));
+      expect(find.text('Could not save the habit. Try again.'), findsOneWidget);
+      expect(find.text('Garden'), findsOneWidget);
+      expect(repository.customCategories, isEmpty);
+      expect(repository.habits.single.categories, isEmpty);
+
+      repository.failSavingHabits = false;
+      await _tapCategoryControl(tester, find.text('Save changes'));
+      expect(repository.customCategories.single.name, 'Garden');
+      expect(repository.customCategories.single.emoji, '🌱');
+      expect(repository.habits.single.categories, repository.customCategories);
+      expect(find.widgetWithText(Chip, 'Garden'), findsOneWidget);
+      expect(find.text('🌱'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'custom categories are reusable, reorderable, and deleted from all habits',
+    (tester) async {
+      _setCategoryTestViewport(tester);
+      const garden = (id: 'custom:garden', name: 'Garden', emoji: '🌱');
+      const music = (id: 'custom:music', name: 'Music', emoji: '🎵');
+      final repository =
+          _MemoryHabitRepository()
+            ..customCategories = [garden, music]
+            ..habits = [
+              const Habit(
+                id: 'first',
+                name: 'Water plants',
+                categories: [garden],
+              ),
+              const Habit(id: 'second', name: 'Sow seeds'),
+            ];
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+      await _tapCategoryControl(tester, find.text('Sow seeds'));
+      await _tapCategoryControl(tester, find.byTooltip('Edit habit'));
+      await _openHabitCategories(tester);
+      await _tapCategoryControl(tester, find.text('Garden'));
+      await _tapCategoryControl(tester, find.text('Edit'));
+      expect(find.text('Fitness'), findsNothing);
+      final handle = find.byTooltip('Reorder Garden');
+      final drag = await tester.startGesture(tester.getCenter(handle));
+      await drag.moveBy(const Offset(0, 20));
+      await tester.pump();
+      await drag.moveBy(const Offset(0, 120));
+      await tester.pumpAndSettle();
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(
+        tester.getTopLeft(find.text('Music')).dy,
+        lessThan(tester.getTopLeft(find.text('Garden')).dy),
+      );
+      await _tapCategoryControl(tester, find.text('Done'));
+      await _tapCategoryControl(tester, find.text('Save'));
+      await _tapCategoryControl(tester, find.text('Save changes'));
+      expect(repository.customCategories, [music, garden]);
+      expect(repository.habits.last.categories, [garden]);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(RizeApp(repository: repository));
+      await tester.pumpAndSettle();
+      await _tapCategoryControl(tester, find.text('Sow seeds'));
+      await _tapCategoryControl(tester, find.byTooltip('Edit habit'));
+      await _openHabitCategories(tester);
+      await _tapCategoryControl(tester, find.text('Edit'));
+      final gardenRow = find.widgetWithText(ListTile, 'Garden').hitTestable();
+      final musicRow = find.widgetWithText(ListTile, 'Music').hitTestable();
+      expect(
+        tester.getTopLeft(musicRow).dy,
+        lessThan(tester.getTopLeft(gardenRow).dy),
+      );
+      await _tapCategoryControl(tester, find.byTooltip('Delete Garden'));
+      expect(
+        find.text(
+          'Saving will remove this category from every habit that uses it.',
+        ),
+        findsOneWidget,
+      );
+      await _tapCategoryControl(tester, find.text('Delete'));
+      await _tapCategoryControl(tester, find.text('Save'));
+      expect(repository.customCategories, [music, garden]);
+      await _tapCategoryControl(tester, find.text('Save changes'));
+      expect(repository.customCategories, [music]);
+      expect(
+        repository.habits.every((habit) => habit.categories.isEmpty),
+        isTrue,
+      );
+      expect(find.widgetWithText(Chip, 'Garden'), findsNothing);
+    },
+  );
+
   testWidgets('habit form protects edits on close and system back', (
     tester,
   ) async {
@@ -241,6 +451,11 @@ void main() {
 
         if (isMeasure) {
           await tester.enterText(amount, '999999');
+          await tester.scrollUntilVisible(
+            unit,
+            -150,
+            scrollable: find.byType(Scrollable).first,
+          );
           await tester.enterText(unit, ' ');
           await expectError('Enter a measurement unit, such as minutes or km.');
           await tester.enterText(unit, 'minutes');
@@ -249,6 +464,11 @@ void main() {
         final validAmounts = [999999, isQuit ? 0 : 1, if (isMeasure) 0.5];
         for (final (index, value) in validAmounts.indexed) {
           if (index > 0) await openEditor();
+          await tester.scrollUntilVisible(
+            amount,
+            150,
+            scrollable: find.byType(Scrollable).first,
+          );
           await tester.enterText(amount, '$value');
           await tester.tap(save);
           await tester.pumpAndSettle();
@@ -2122,7 +2342,7 @@ void main() {
 
     final goal = find.byKey(const Key('habit-goal'));
     await tester.scrollUntilVisible(
-      goal,
+      find.text('DAILY LIMIT'),
       220,
       scrollable: find.byType(Scrollable).first,
     );
